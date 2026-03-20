@@ -1,0 +1,1437 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nexus Strategy CC | Darwin Diamon</title>
+
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Libraries for Data Handling -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+
+    <!-- Icons (Lucide) -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+        }
+
+        /* --- ANIMACIONES --- */
+        .fade-in {
+            animation: fadeIn 0.3s ease-in-out;
+        }
+
+        .slide-up {
+            animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .scale-up {
+            animation: scaleUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .animate-pulse-once {
+            animation: pulseOnce 0.5s ease-in-out;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+            }
+
+            to {
+                opacity: 1;
+            }
+        }
+
+        @keyframes slideUp {
+            from {
+                transform: translateY(20px);
+                opacity: 0;
+            }
+
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        @keyframes scaleUp {
+            from {
+                transform: scale(0.95);
+                opacity: 0;
+            }
+
+            to {
+                transform: scale(1);
+                opacity: 1;
+            }
+        }
+
+        @keyframes pulseOnce {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.6;
+            }
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        /* --- SCROLLBARS --- */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+
+        /* --- UTILIDADES --- */
+        .spinner {
+            border: 3px solid rgba(37, 99, 235, 0.1);
+            border-radius: 50%;
+            border-top: 3px solid #2563eb;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+        }
+
+        /* --- WIZARD STEPS --- */
+        .step-line {
+            flex: 1;
+            height: 2px;
+            background: #e2e8f0;
+            margin: 0 12px;
+            position: relative;
+            top: -10px;
+        }
+
+        .step-active .step-line {
+            background: #3b82f6;
+        }
+
+        .step-completed .step-line {
+            background: #10b981;
+        }
+
+        .step-circle {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 14px;
+            z-index: 10;
+            transition: all 0.3s;
+            position: relative;
+            border: 2px solid transparent;
+            background: white;
+        }
+
+        .step-active .step-circle {
+            background: #3b82f6;
+            color: white;
+            box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.2);
+            border-color: white;
+        }
+
+        .step-inactive .step-circle {
+            background: #e2e8f0;
+            color: #94a3b8;
+        }
+
+        .step-completed .step-circle {
+            background: #10b981;
+            color: white;
+        }
+
+        /* --- FIXES VISUALES CRÍTICOS --- */
+        /* Permite que los tooltips salgan de la celda de la tabla sin cortarse */
+        .overflow-visible {
+            overflow: visible !important;
+        }
+
+        /* Asegura que el tooltip flote en la capa más alta */
+        .z-tooltip {
+            z-index: 9999 !important;
+        }
+
+        /* Estilos para Inputs y Selects en Tablas */
+        td {
+            position: relative;
+        }
+
+        select option {
+            font-size: 14px;
+            padding: 4px;
+        }
+
+        /* --- PARCHE v1.1: ESTILOS PORTAL --- */
+        #portal-root {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 0;
+            z-index: 99999;
+            /* Máxima prioridad */
+            pointer-events: none;
+            /* Permitir clics a través del contenedor vacío */
+        }
+
+        .portal-tooltip-content {
+            pointer-events: auto;
+            position: fixed;
+            /* Posición fija relativa a la ventana */
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            animation: fadeIn 0.2s ease-out;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="root"></div>
+
+    <script>
+        window.nexusAPI = window.nexusAPI || {};
+    </script>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useMemo } = React;
+
+        // --- DICCIONARIO DE PREDICCIÓN ---
+        const PREDICTION_DICT = {
+            ID: ['RUT', 'ROW_ID', 'VENDOR_LEAD_CODE', 'DDAS_NRT_PPAL', 'ID_CLIENTE', 'ID', 'CEDULA', 'CUENTA'],
+            DATE: ['MODIFY_DATE', 'CALL_DATE', 'DATE', 'FECHA_LLAMADA', 'FECHA_GESTION', 'FECHA'],
+            ATTEMPTS: ['CALLED_COUNT', 'INTENTOS', 'NIVABS', 'CANTIDAD_LLAMADAS'],
+            STATUS: ['STATUS', 'CALL_STATUS_NUM', 'ESTADO_LLAMADA', 'CODIGO_ESTADO', 'COD_RESPUESTA']
+        };
+
+        // Helper de Predicción
+        const predictColumn = (headers, type) => {
+            const keywords = PREDICTION_DICT[type] || [];
+            for (const key of keywords) {
+                const match = headers.find(h => h.toUpperCase() === key.toUpperCase());
+                if (match) return match;
+            }
+            for (const key of keywords) {
+                const match = headers.find(h => h.toUpperCase().includes(key.toUpperCase()));
+                if (match) return match;
+            }
+            return '';
+        };
+
+        // --- SERVICIO DE BASE DE DATOS (IndexedDB) ---
+        class DBService {
+            constructor() {
+                this.dbName = 'NexusCC_DB';
+                this.version = 2;
+                this.db = null;
+            }
+            async connect() {
+                return new Promise((resolve, reject) => {
+                    const request = indexedDB.open(this.dbName, this.version);
+                    request.onupgradeneeded = (event) => {
+                        const db = event.target.result;
+                        if (!db.objectStoreNames.contains('campaigns')) db.createObjectStore('campaigns', { keyPath: 'code' });
+                        if (!db.objectStoreNames.contains('typifications')) {
+                            const store = db.createObjectStore('typifications', { keyPath: 'id' });
+                            store.createIndex('campaign', 'campaign', { unique: false });
+                        }
+                        // Nuevo Store para Módulos de Usuario
+                        if (!db.objectStoreNames.contains('modules')) {
+                            db.createObjectStore('modules', { keyPath: 'id' });
+                        }
+
+                    };
+                    request.onsuccess = (e) => { this.db = e.target.result; resolve(this.db); };
+                    request.onerror = (e) => reject('Error DB');
+                });
+            }
+            async getAll(store) {
+                if (!this.db) await this.connect();
+                return new Promise((resolve, reject) => {
+                    const tx = this.db.transaction([store], 'readonly');
+                    const req = tx.objectStore(store).getAll();
+                    req.onsuccess = () => resolve(req.result);
+                    req.onerror = () => reject(req.error);
+                });
+            }
+            async addOrUpdate(storeName, items) {
+                if (!this.db) await this.connect();
+                return new Promise((resolve, reject) => {
+                    const tx = this.db.transaction([storeName], 'readwrite');
+                    const store = tx.objectStore(storeName);
+                    items.forEach(item => store.put(item));
+                    tx.oncomplete = () => resolve(true);
+                    tx.onerror = () => reject(tx.error);
+                });
+            }
+            async clearStore(storeName) {
+                if (!this.db) await this.connect();
+                return new Promise((resolve, reject) => {
+                    const tx = this.db.transaction([storeName], 'readwrite');
+                    const req = tx.objectStore(storeName).clear();
+                    req.onsuccess = () => resolve(true);
+                    req.onerror = () => reject(req.error);
+                });
+            }
+            async deleteItem(storeName, key) {
+                if (!this.db) await this.connect();
+                return new Promise((resolve, reject) => {
+                    const transaction = this.db.transaction([storeName], 'readwrite');
+                    const store = transaction.objectStore(storeName);
+                    const request = store.delete(key);
+                    request.onsuccess = () => resolve(true);
+                    request.onerror = () => reject(request.error);
+                });
+            }
+        }
+        const dbService = new DBService();
+
+        // --- UI COMPONENTS ---
+        const Icon = ({ name, size = 20, className = "" }) => {
+            const icons = {
+                // --- BÁSICOS SISTEMA (NO BORRAR) ---
+                home: <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>,
+                settings: <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>,
+                layers: <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>,
+                trash: <polyline points="3 6 5 6 21 6"></polyline>,
+                upload: <g><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></g>,
+                plus: <line x1="12" y1="5" x2="12" y2="19"></line>,
+                check: <polyline points="20 6 9 17 4 12"></polyline>,
+                alert: <circle cx="12" cy="12" r="10"></circle>,
+                arrowLeft: <line x1="19" y1="12" x2="5" y2="12"></line>,
+                arrowRight: <line x1="5" y1="12" x2="19" y2="12"></line>,
+                database: <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>,
+                file: <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>,
+                loader: <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path>,
+                save: <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>,
+                x: <line x1="18" y1="6" x2="6" y2="18"></line>,
+                edit: <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>,
+                search: <circle cx="11" cy="11" r="8"></circle>,
+                warn: <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>,
+                filter: <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>,
+                info: <circle cx="12" cy="12" r="10"></circle>,
+
+                // --- NUEVOS: HERRAMIENTAS Y TRABAJO ---
+                briefcase: <g><rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path></g>,
+                tool: <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>,
+                target: <g><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></g>,
+
+                // --- NUEVO: COMUNICACIÓN ---
+                phone: <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>,
+
+                // --- NUEVOS: DATOS Y GRÁFICOS ---
+                chart: <g><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></g>,
+                pie: <path d="M21.21 15.89A10 10 0 1 1 8 2.83"></path>,
+                activity: <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>,
+
+                // --- NUEVOS: USUARIOS Y SEGURIDAD ---
+                user: <g><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></g>,
+                users: <g><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></g>,
+                lock: <g><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></g>,
+                shield: <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>,
+
+                // --- NUEVOS: ARCHIVOS Y COMUNICACIÓN ---
+                folder: <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>,
+                download: <g><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></g>,
+                mail: <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>,
+
+                // --- NUEVOS: INTERFAZ Y TIEMPO ---
+                calendar: <g><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></g>,
+                clock: <circle cx="12" cy="12" r="10"></circle>,
+                eye: <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>,
+                link: <g><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></g>,
+                refresh: <path d="M23 4v6h-6"></path>,
+                terminal: <polyline points="4 17 10 11 4 5"></polyline>,
+                'file-code': <g><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path><polyline points="14 2 14 8 20 8"></polyline><path d="m10 13-2 2 2 2"></path><path d="m14 17 2-2-2-2"></path></g>,
+                code: <polyline points="16 18 22 12 16 6"></polyline>,
+                server: <g><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></g>,
+                zap: <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>,
+                cpu: <g><rect x="4" y="4" width="16" height="16" rx="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="15" x2="23" y2="15"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="15" x2="4" y2="15"></line></g>
+            };
+
+            // RENDER (RETURN) - ¡ESTO MANTIENE LA COMPATIBILIDAD CON ÍCONOS VIEJOS!
+            return (
+                <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                    {/* Dibuja el ícono desde el diccionario nuevo */}
+                    {icons[name] || icons.alert}
+
+                    {/* Lógica "parche" para íconos antiguos que necesitan múltiples trazos */}
+                    {name === 'x' && <line x1="6" y1="6" x2="18" y2="18"></line>}
+                    {name === 'edit' && <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>}
+                    {name === 'search' && <line x1="21" y1="21" x2="16.65" y2="16.65"></line>}
+                    {name === 'warn' && <path d="M12 9v4"></path>}
+                    {name === 'warn' && <path d="M12 17h.01"></path>}
+                    {name === 'info' && <><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></>}
+                    {name === 'terminal' && <line x1="12" y1="19" x2="20" y2="19"></line>}
+                    {name === 'code' && <polyline points="8 6 2 12 8 18"></polyline>}
+                </svg>
+            );
+        };
+
+        // --- COMPONENTE TOOLTIP GENÉRICO ---
+        const InfoTooltip = ({ trigger, content, isError = false }) => {
+            if (!trigger) return null;
+
+            return (
+                <div className="group relative inline-block cursor-help z-10">
+                    <span className={`font-bold border-b border-dotted ${isError ? 'text-red-600 border-red-300' : 'text-gray-700 border-gray-400'}`}>
+                        {trigger}
+                    </span>
+                    <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 w-64 bg-slate-800 text-white text-xs rounded p-3 shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 text-center">
+                        {content}
+                        <div className="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-slate-800"></div>
+                    </div>
+                </div>
+            );
+        };
+
+        const Toast = ({ message, type, onClose }) => {
+            useEffect(() => { const t = setTimeout(onClose, 4000); return () => clearTimeout(t); }, [onClose]);
+            const colors = { success: 'bg-green-600', error: 'bg-red-600', info: 'bg-blue-600', warning: 'bg-yellow-500' };
+            return (
+                <div className={`fixed top-5 right-5 z-50 text-white px-6 py-4 rounded-lg shadow-xl flex items-center gap-3 slide-up ${colors[type] || 'bg-gray-800'}`}>
+                    <span className="font-medium">{message}</span>
+                    <button onClick={onClose} className="opacity-70 hover:opacity-100 ml-2">×</button>
+                </div>
+            );
+        };
+
+        const GlobalConfirmDialog = ({ isOpen, config, onClose }) => {
+            if (!isOpen) return null;
+            const { title, message, type = 'danger', onConfirm, confirmText = 'Confirmar' } = config;
+            const styles = {
+                danger: { icon: 'trash', color: 'text-red-600', bg: 'bg-red-100', btn: 'bg-red-600 hover:bg-red-700' },
+                warning: { icon: 'warn', color: 'text-orange-600', bg: 'bg-orange-100', btn: 'bg-orange-600 hover:bg-orange-700' },
+                info: { icon: 'alert', color: 'text-blue-600', bg: 'bg-blue-100', btn: 'bg-blue-600 hover:bg-blue-700' }
+            };
+            const theme = styles[type] || styles.info;
+            return (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm fade-in">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden scale-up border border-gray-100">
+                        <div className="p-6">
+                            <div className="flex items-start gap-4">
+                                <div className={`p-3 rounded-full shrink-0 ${theme.bg} ${theme.color}`}><Icon name={theme.icon} size={28} /></div>
+                                <div>
+                                    <h3 className="text-xl font-bold text-gray-900">{title}</h3>
+                                    <div className="mt-2 text-sm text-gray-600 leading-relaxed whitespace-pre-line">{message}</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3">
+                            <button onClick={onClose} className="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 font-medium transition-colors">Cancelar</button>
+                            <button onClick={() => { onConfirm(); onClose(); }} className={`px-4 py-2 text-white rounded-lg font-bold shadow-md transition-transform active:scale-95 ${theme.btn}`}>{confirmText}</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // --- COMPONENTE STATUS BAR (PARCHE v3.7 - Catastro Completo) ---
+        const StatusBar = ({ stats, isVisible }) => {
+            if (!isVisible) return null;
+
+            const fmt = (n) => n ? n.toLocaleString('es-CL') : '0';
+            const retentionRate = stats.raw > 0 ? ((stats.available / stats.raw) * 100).toFixed(1) : 0;
+
+            // Helper para items de resta
+            const StatItem = ({ label, value, color, icon }) => (
+                <div className={`flex flex-col items-center px-4 border-r border-slate-800 last:border-0 transition-opacity ${value > 0 ? 'opacity-100' : 'opacity-25 grayscale'}`}>
+                    <span className={`text-[9px] uppercase font-bold ${color} flex items-center gap-1 mb-0.5`}>
+                        <Icon name={icon} size={10} /> {label}
+                    </span>
+                    <span className={`text-xs font-mono font-medium ${color.replace('text-', 'text-opacity-80 ')}`}>
+                        -{fmt(value)}
+                    </span>
+                </div>
+            );
+
+            return (
+                <div className="fixed bottom-0 left-0 w-full bg-slate-900 text-white border-t border-slate-700 shadow-2xl z-[100] slide-up font-inter">
+                    {/* Barra de Progreso (Retención) */}
+                    <div className="w-full h-0.5 bg-slate-800">
+                        <div className="h-full bg-gradient-to-r from-red-500 via-yellow-400 to-emerald-500 transition-all duration-700" style={{ width: `${retentionRate}%` }}></div>
+                    </div>
+
+                    <div className="max-w-7xl mx-auto px-4 py-2 flex items-center justify-between h-14">
+
+                        {/* 1. BASE X (Origen) */}
+                        <div className="flex items-center gap-3 pr-6 border-r border-slate-700">
+                            <div className="p-2 bg-slate-800 rounded text-blue-400"><Icon name="database" size={16} /></div>
+                            <div className="flex flex-col">
+                                <span className="text-[9px] text-slate-500 uppercase font-bold">Base Carga (X)</span>
+                                <span className="text-base font-bold text-white leading-none">{fmt(stats.raw)}</span>
+                            </div>
+                        </div>
+
+                        {/* 2. CATASTRO DE RESTAS (El flujo) */}
+                        <div className="flex-1 flex justify-center items-center">
+                            <StatItem label="Duplicados" value={stats.duplicatesDiscard} color="text-slate-400" icon="layers" />
+                            <StatItem label="Cerrados" value={stats.statusDiscard} color="text-red-400" icon="trash" />
+                            <StatItem label="Bajas" value={stats.bajasDiscard} color="text-orange-400" icon="filter" />
+                            <StatItem label="Filtros" value={stats.filtersDiscard} color="text-yellow-400" icon="search" />
+                        </div>
+
+                        {/* 3. RESULTADO (Destino) */}
+                        <div className="flex items-center gap-4 pl-6 border-l border-slate-700 bg-slate-900/50">
+                            <div className="text-right hidden sm:block">
+                                <div className="text-[9px] uppercase font-bold text-emerald-500">A Descargar</div>
+                                <div className="text-[10px] text-slate-500 font-mono">Retención: {retentionRate}%</div>
+                            </div>
+                            <div className="text-2xl font-black text-emerald-400 tracking-tight bg-emerald-900/20 px-3 py-1 rounded border border-emerald-900/30">
+                                {fmt(stats.available)}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // --- UTILS ---
+        const readFile = (file) => {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                const isExcel = file.name.endsWith('.xlsx') || file.name.endsWith('.xls');
+                reader.onload = (e) => {
+                    try {
+                        let data = [];
+                        if (isExcel) {
+                            const workbook = XLSX.read(e.target.result, { type: 'binary' });
+                            const sheetName = workbook.SheetNames[0];
+                            data = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: "" });
+                        } else {
+                            const csvData = Papa.parse(e.target.result, { header: true, skipEmptyLines: true });
+                            data = csvData.data;
+                        }
+                        resolve({ name: file.name, data });
+                    } catch (err) { reject(err); }
+                };
+                if (isExcel) reader.readAsBinaryString(file);
+                else reader.readAsText(file);
+            });
+        };
+
+        // --- COMPONENTE PORTAL TOOLTIP (PARCHE v1.1) ---
+        // Renderiza el contenido fuera del flujo normal del DOM para evitar cortes
+        const PortalTooltip = ({ trigger, content, isError = false }) => {
+            const [visible, setVisible] = useState(false);
+            const [coords, setCoords] = useState({ top: 0, left: 0 });
+            const triggerRef = useRef(null);
+
+            const handleMouseEnter = () => {
+                if (triggerRef.current) {
+                    const rect = triggerRef.current.getBoundingClientRect();
+                    // Calcular posición: Centrado arriba del elemento
+                    setCoords({
+                        top: rect.top - 10, // 10px arriba del elemento
+                        left: rect.left + (rect.width / 2) // Centro horizontal
+                    });
+                    setVisible(true);
+                }
+            };
+
+            const handleMouseLeave = () => setVisible(false);
+
+            return (
+                <>
+                    <span
+                        ref={triggerRef}
+                        onMouseEnter={handleMouseEnter}
+                        onMouseLeave={handleMouseLeave}
+                        className={`cursor-help border-b border-dotted ${isError ? 'text-red-600 border-red-300' : 'text-gray-700 border-gray-400'} font-medium`}
+                    >
+                        {trigger}
+                    </span>
+
+                    {visible && ReactDOM.createPortal(
+                        <div
+                            className="portal-tooltip-content bg-slate-800 text-white text-xs rounded p-3 max-w-xs text-center z-[99999]"
+                            style={{
+                                top: coords.top,
+                                left: coords.left,
+                                transform: 'translate(-50%, -100%)' // Mueve la caja hacia arriba y la centra
+                            }}
+                        >
+                            {content}
+                            {/* Flecha decorativa */}
+                            <div className="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-slate-800"></div>
+                        </div>,
+                        document.body // Renderizar directamente en el body
+                    )}
+                </>
+            );
+        };
+
+        // --- COMPONENTE MULTI-SELECT (PARCHE v3.0) ---
+        const MultiSelect = ({ options, value, onChange, placeholder = "Seleccionar..." }) => {
+            const [isOpen, setIsOpen] = useState(false);
+            const containerRef = useRef(null);
+
+            // Cerrar al hacer click fuera
+            useEffect(() => {
+                const handleClickOutside = (event) => {
+                    if (containerRef.current && !containerRef.current.contains(event.target)) {
+                        setIsOpen(false);
+                    }
+                };
+                document.addEventListener("mousedown", handleClickOutside);
+                return () => document.removeEventListener("mousedown", handleClickOutside);
+            }, []);
+
+            const handleToggle = (opt) => {
+                const current = Array.isArray(value) ? value : [];
+                const updated = current.includes(opt)
+                    ? current.filter(v => v !== opt)
+                    : [...current, opt];
+                onChange(updated);
+            };
+
+            const selectedCount = Array.isArray(value) ? value.length : 0;
+
+            return (
+                <div className="relative w-1/3" ref={containerRef}>
+                    <div
+                        onClick={() => setIsOpen(!isOpen)}
+                        className="w-full text-xs border bg-white rounded p-1.5 cursor-pointer flex justify-between items-center hover:border-blue-400 transition-colors"
+                    >
+                        <span className={`truncate font-bold ${selectedCount > 0 ? 'text-blue-700' : 'text-gray-400'}`}>
+                            {selectedCount > 0 ? `${selectedCount} seleccionados` : placeholder}
+                        </span>
+                        <Icon name="arrowRight" size={10} className={`transform transition-transform ${isOpen ? 'rotate-90' : 'rotate-0'}`} />
+                    </div>
+
+                    {isOpen && (
+                        <div className="absolute top-full left-0 w-64 bg-white border border-gray-200 shadow-xl rounded-lg mt-1 z-50 max-h-48 overflow-y-auto p-2 slide-up">
+                            {options.length === 0 ? (
+                                <div className="text-center text-gray-400 text-xs italic py-2">No hay valores</div>
+                            ) : (
+                                <div className="grid grid-cols-1 gap-1">
+                                    {options.map((opt, i) => {
+                                        const isSelected = Array.isArray(value) && value.includes(opt);
+                                        return (
+                                            <label key={i} className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-xs transition-colors ${isSelected ? 'bg-blue-50 text-blue-700 font-bold' : 'hover:bg-gray-50 text-gray-600'}`}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={isSelected}
+                                                    onChange={() => handleToggle(opt)}
+                                                    className="rounded text-blue-600 focus:ring-0 cursor-pointer"
+                                                />
+                                                <span className="truncate">{opt}</span>
+                                            </label>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+
+        // --- MÓDULO ADMIN ---
+        const AdminModule = ({ addToast, onNavigateHome, confirmAction }) => {
+            const [activeTab, setActiveTab] = useState('campaigns');
+            const [data, setData] = useState([]);
+            const [campaigns, setCampaigns] = useState([]);
+            const [loading, setLoading] = useState(false);
+            // [Mejora 1.1] Estado actualizado para incluir lista de 'invalid'
+            const [importModal, setImportModal] = useState({ open: false, conflicts: [], newItems: [], invalid: [] });
+            const [editingId, setEditingId] = useState(null);
+            const [editForm, setEditForm] = useState({});
+            const [filterCampaign, setFilterCampaign] = useState('');
+            const fileInputRef = useRef(null);
+
+            // NUEVO: Estados para SQL Volátil
+            const [sqlForm, setSqlForm] = useState({ server: '', database: '', user: '', password: '' });
+            const [sqlConnected, setSqlConnected] = useState(false);
+
+            // Manejador de Conexión SQL
+            const handleSqlConnect = async (e) => {
+                e.preventDefault();
+                setLoading(true);
+                try {
+                    // Construimos la configuración base (sin obligar la BBDD)
+                    const dbConfig = {
+                        server: sqlForm.server,
+                        user: sqlForm.user,
+                        password: sqlForm.password,
+                        options: { encrypt: false, trustServerCertificate: true }
+                    };
+
+                    // Solo agregamos el parámetro si escribiste algo en el campo
+                    if (sqlForm.database && sqlForm.database.trim() !== '') {
+                        dbConfig.database = sqlForm.database.trim();
+                    }
+
+                    const result = await window.nexusAPI.connectSQL(dbConfig);
+
+                    if (result.success) {
+                        setSqlConnected(true);
+                        addToast('Conexión SQL establecida exitosamente', 'success');
+                    } else {
+                        setSqlConnected(false);
+                        addToast('Error SQL: ' + result.error, 'error');
+                    }
+                } catch (err) {
+                    addToast('Error de comunicación con el motor', 'error');
+                }
+                setLoading(false);
+            };
+
+            // Manejador de Desconexión
+            const handleSqlDisconnect = () => {
+                setSqlConnected(false);
+                setSqlForm({ server: '', database: '', user: '', password: '' });
+                addToast('Desconectado de SQL Server', 'info');
+            };
+
+            useEffect(() => { loadData(); setEditingId(null); setFilterCampaign(''); }, [activeTab]);
+
+            const campaignsMap = useMemo(() => {
+                const map = {};
+                campaigns.forEach(c => map[c.code] = c.name);
+                return map;
+            }, [campaigns]);
+
+            const loadData = async () => {
+                setLoading(true);
+                try {
+                    const camps = await dbService.getAll('campaigns');
+                    setCampaigns(camps);
+                    if (activeTab === 'campaigns') { setData(camps); }
+                    else { const types = await dbService.getAll('typifications'); setData(types); }
+                }
+                catch (error) { addToast('Error cargando datos', 'error'); }
+                finally { setLoading(false); }
+            };
+
+            const filteredData = useMemo(() => {
+                if (activeTab === 'campaigns' || !filterCampaign) return data;
+                return data.filter(item => item.campaign === filterCampaign);
+            }, [data, activeTab, filterCampaign]);
+
+            const uniqueCampaigns = useMemo(() => {
+                if (activeTab !== 'typifications') return [];
+                return Array.from(new Set(data.map(item => item.campaign))).sort();
+            }, [data, activeTab]);
+
+            const startEditing = (item) => { setEditingId(activeTab === 'campaigns' ? item.code : item.id); setEditForm({ ...item }); };
+            const cancelEditing = () => { setEditingId(null); setEditForm({}); };
+            const handleInputChange = (field, value) => setEditForm(prev => ({ ...prev, [field]: value }));
+
+            // MODIFICADO: Guardado inteligente (Genera ID automático para tipificaciones)
+            const saveEditing = async () => {
+                setLoading(true);
+                try {
+                    let itemToSave = { ...editForm };
+
+                    // CORRECCIÓN: Eliminar la bandera 'isNew' antes de guardar.
+                    // Esto evita que al recargar la app crea que el registro sigue en modo "creación" (input vacío).
+                    if (itemToSave.isNew) delete itemToSave.isNew;
+
+                    // Si es tipificación nueva o editada, regenerar ID compuesto para asegurar integridad
+                    if (activeTab === 'typifications') {
+                        if (!itemToSave.campaign || !itemToSave.status) throw new Error("Campaña y Status son obligatorios");
+                        itemToSave.id = `${itemToSave.campaign.trim()}_${itemToSave.status.trim()}`;
+                    }
+
+                    await dbService.addOrUpdate(activeTab === 'campaigns' ? 'campaigns' : 'typifications', [itemToSave]);
+                    addToast('Guardado correctamente', 'success');
+                    setEditingId(null);
+                    loadData();
+                } catch (err) { addToast(err.message || 'Error al guardar', 'error'); } finally { setLoading(false); }
+            };
+
+            // NUEVO: Función para iniciar un registro en blanco
+            const handleAddNew = () => {
+                const tempId = `NEW_${Date.now()}`; // ID temporal para que React lo renderice
+                // Creamos el objeto vacío según la pestaña activa
+                const newItem = activeTab === 'campaigns'
+                    ? { code: '', name: '', isNew: true }
+                    : { id: tempId, campaign: filterCampaign || '', status: '', detail: '', managed: 1, closedOrAgenda: 0, ranking: 99, isContact: 0, isRPC: 0, isSuccess: 0, isNew: true };
+
+                // Lo inyectamos visualmente al principio de la tabla
+                setData(prev => [newItem, ...prev]);
+                // Activamos modo edición inmediatamente
+                setEditingId(activeTab === 'campaigns' ? newItem.code : newItem.id);
+                setEditForm(newItem);
+            };
+
+            const handleDeleteItem = (item) => {
+                const id = activeTab === 'campaigns' ? item.code : item.id;
+                confirmAction({
+                    title: 'Eliminar Registro', message: `¿Eliminar "${activeTab === 'campaigns' ? item.name : item.status}"?`,
+                    type: 'danger', confirmText: 'Eliminar',
+                    onConfirm: async () => {
+                        await dbService.deleteItem(activeTab === 'campaigns' ? 'campaigns' : 'typifications', id);
+                        addToast('Eliminado', 'success'); loadData();
+                    }
+                });
+            };
+
+            const handleFileUpload = (e) => {
+                const file = e.target.files[0]; if (!file) return;
+                Papa.parse(file, { header: true, skipEmptyLines: true, complete: (r) => processImport(r.data), error: () => addToast('Error archivo', 'error') });
+                e.target.value = '';
+            };
+
+            const processImport = async (imported) => {
+                const current = await dbService.getAll(activeTab === 'campaigns' ? 'campaigns' : 'typifications');
+                const ids = new Set(current.map(i => activeTab === 'campaigns' ? i.code : i.id));
+
+                const conflicts = [];
+                const newItems = [];
+                const invalid = [];
+
+                imported.forEach(row => {
+                    let item = null;
+                    let id = null;
+
+                    if (activeTab === 'campaigns') {
+                        if (row.CAMPAIGN) {
+                            id = row.CAMPAIGN.trim();
+                            item = { code: id, name: row.NOMBRE_CAMPAIGN?.trim() || '' };
+                        }
+                    } else {
+                        // [Mejora 1.3] Validación Estricta: Regex /^\d+$/ 
+                        // Esto asegura que SOLO haya dígitos. "5B" fallará aquí.
+                        const rankStr = row.MEJOR_GESTION ? String(row.MEJOR_GESTION).trim() : '';
+
+                        if (rankStr !== '' && !/^\d+$/.test(rankStr)) {
+                            invalid.push({ ...row, reason: 'Ranking contiene caracteres no numéricos' });
+                        }
+                        else if (row.CAMPAIGN && row.STATUS) {
+                            id = `${row.CAMPAIGN.trim()}_${row.STATUS.trim()}`;
+                            item = {
+                                id,
+                                campaign: row.CAMPAIGN.trim(),
+                                status: row.STATUS.trim(),
+                                detail: row.DETALLE || '',
+                                managed: parseInt(row.GESTIONADO) || 0,
+                                closedOrAgenda: parseInt(row['CERRADO/AGENDA']) || 0,
+                                ranking: rankStr === '' ? 99 : parseInt(rankStr), // Usamos el valor limpio
+
+                                // --- NUEVOS CAMPOS ANALÍTICAS (Soporte Multi-Cabecera) ---
+                                // Busca: HUB o ES_CONTACTO o CONTACTO
+                                isContact: parseInt(row['HUB'] || row['ES_CONTACTO'] || row['CONTACTO']) || 0,
+                                // Busca: RPC o ES_RPC o TITULAR
+                                isRPC: parseInt(row['RPC'] || row['ES_RPC'] || row['TITULAR']) || 0,
+                                // Busca: EXITO o ES_EXITO o VENTA
+                                isSuccess: parseInt(row['EXITO'] || row['ES_EXITO'] || row['VENTA']) || 0
+                            };
+                        }
+                    }
+
+                    if (item) ids.has(id) ? conflicts.push(item) : newItems.push(item);
+                });
+
+                if (conflicts.length > 0 || invalid.length > 0) {
+                    setImportModal({ open: true, conflicts, newItems, invalid });
+                }
+                else if (newItems.length > 0) {
+                    await dbService.addOrUpdate(activeTab === 'campaigns' ? 'campaigns' : 'typifications', newItems);
+                    addToast(`Importados ${newItems.length}`, 'success');
+                    loadData();
+                }
+                else {
+                    addToast('Sin datos nuevos válidos', 'info');
+                }
+            };
+
+            const resolveConflict = async (decision) => {
+                let items = [...importModal.newItems];
+                if (decision === 'overwrite') items = [...items, ...importModal.conflicts];
+                await dbService.addOrUpdate(activeTab === 'campaigns' ? 'campaigns' : 'typifications', items);
+                setImportModal({ open: false, conflicts: [], newItems: [] }); loadData(); addToast('Procesado', 'success');
+            };
+
+            const handleDeleteAll = () => {
+                confirmAction({
+                    title: 'Reset Fábrica', message: '¿BORRAR TODO? Se eliminarán Campañas y Tipificaciones.',
+                    type: 'danger', confirmText: 'BORRAR TODO',
+                    onConfirm: async () => {
+                        setLoading(true);
+                        await dbService.clearStore('campaigns'); await dbService.clearStore('typifications');
+                        addToast('Reseteado', 'warning'); loadData(); setLoading(false);
+                    }
+                });
+            };
+
+            // NUEVA FUNCIÓN: Eliminar tipificaciones por campaña seleccionada
+            const handleDeleteByCampaign = () => {
+                if (!filterCampaign) return addToast('Selecciona una campaña específica primero', 'warning');
+
+                confirmAction({
+                    title: `Limpiar Campaña: ${filterCampaign}`,
+                    message: `¿Estás seguro de que deseas ELIMINAR TODAS las tipificaciones asociadas a la campaña "${filterCampaign}"?\n\nEsta acción no afectará a otras campañas.`,
+                    type: 'danger',
+                    confirmText: 'Eliminar Grupo',
+                    onConfirm: async () => {
+                        setLoading(true);
+                        try {
+                            // 1. Obtener todas para filtrar los IDs correctos
+                            const allTyps = await dbService.getAll('typifications');
+                            const toDelete = allTyps.filter(t => t.campaign === filterCampaign);
+
+                            if (toDelete.length === 0) {
+                                addToast('No hay registros para eliminar en esta campaña', 'info');
+                                return;
+                            }
+
+                            // 2. Ejecutar eliminación en paralelo
+                            const deletePromises = toDelete.map(item => dbService.deleteItem('typifications', item.id));
+                            await Promise.all(deletePromises);
+
+                            addToast(`Se eliminaron ${toDelete.length} tipificaciones de ${filterCampaign}`, 'success');
+                            loadData(); // Recargar tabla
+                        } catch (err) {
+                            console.error(err);
+                            addToast('Error al eliminar el grupo', 'error');
+                        } finally {
+                            setLoading(false);
+                        }
+                    }
+                });
+            };
+
+            return (
+                <div className="min-h-screen bg-yellow-50 p-6 slide-up">
+                    <div className="max-w-7xl mx-auto">
+                        <div className="flex justify-between items-center mb-8">
+                            <h2 className="text-3xl font-bold text-yellow-800 flex gap-3"><Icon name="settings" /> Administrador</h2>
+                            <button onClick={onNavigateHome} className="bg-white border border-yellow-400 text-yellow-700 px-4 py-2 rounded hover:bg-yellow-100 flex gap-2"><Icon name="arrowLeft" size={18} /> Inicio</button>
+                        </div>
+                        <div className="flex gap-4 mb-6 border-b border-yellow-200 pb-1">
+                            <button onClick={() => setActiveTab('campaigns')} className={`px-6 py-3 rounded-t-lg font-bold ${activeTab === 'campaigns' ? 'bg-yellow-500 text-white' : 'bg-yellow-100 text-yellow-800'}`}>Campañas</button>
+                            <button onClick={() => setActiveTab('typifications')} className={`px-6 py-3 rounded-t-lg font-bold ${activeTab === 'typifications' ? 'bg-yellow-500 text-white' : 'bg-yellow-100 text-yellow-800'}`}>Tipificaciones</button>
+                            <button onClick={() => setActiveTab('database')} className={`px-6 py-3 rounded-t-lg font-bold flex gap-2 items-center transition-colors ${activeTab === 'database' ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800 hover:bg-blue-200'}`}>
+                                <Icon name="database" size={18} /> Conexión SQL
+                            </button>
+                        </div>
+
+                        {/* PANEL DE BASE DE DATOS (VOLÁTIL) */}
+                        {activeTab === 'database' && (
+                            <div className="bg-white p-8 rounded-xl shadow-lg max-w-2xl mx-auto border-t-4 border-blue-600 slide-up">
+                                <div className="text-center mb-8">
+                                    <div className={`w-20 h-20 mx-auto rounded-full flex items-center justify-center mb-4 shadow-inner transition-colors ${sqlConnected ? 'bg-green-100 text-green-600' : 'bg-slate-100 text-slate-400'}`}>
+                                        <Icon name="server" size={40} />
+                                    </div>
+                                    <h3 className="text-2xl font-bold text-gray-800">Motor SQL Server</h3>
+                                    <p className="text-sm text-gray-500 mt-2">
+                                        Las credenciales se guardan <strong>solo en la RAM</strong>. Al cerrar la aplicación, la conexión se destruye por seguridad.
+                                    </p>
+                                </div>
+
+                                {sqlConnected ? (
+                                    <div className="bg-green-50 border border-green-200 rounded-lg p-6 text-center slide-up">
+                                        <h4 className="text-green-800 font-bold text-lg mb-2 flex items-center justify-center gap-2">
+                                            <Icon name="check" size={24} /> Conectado a {sqlForm.server}
+                                        </h4>
+                                        <p className="text-green-600 text-sm mb-6">Los módulos dinámicos ya pueden realizar consultas a la base de datos <strong>{sqlForm.database}</strong>.</p>
+                                        <button onClick={handleSqlDisconnect} className="bg-white border-2 border-green-600 text-green-700 px-6 py-2 rounded-lg font-bold hover:bg-green-50 transition-colors shadow-sm">
+                                            Desconectar Motor
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <form onSubmit={handleSqlConnect} className="space-y-4">
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Servidor (IP o Host)</label>
+                                                <input type="text" required value={sqlForm.server} onChange={e => setSqlForm({ ...sqlForm, server: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow" placeholder="ej: 192.168.1.100" />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Base de Datos <span className="text-gray-400 font-normal">(Opcional)</span></label>
+                                                <input type="text" value={sqlForm.database} onChange={e => setSqlForm({ ...sqlForm, database: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow" placeholder="Vacío = Conexión a raíz (master)" />
+                                            </div>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Usuario</label>
+                                                <input type="text" required value={sqlForm.user} onChange={e => setSqlForm({ ...sqlForm, user: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow" placeholder="sa" />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Contraseña</label>
+                                                <input type="password" required value={sqlForm.password} onChange={e => setSqlForm({ ...sqlForm, password: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow" placeholder="••••••••" />
+                                            </div>
+                                        </div>
+                                        <button type="submit" disabled={loading} className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 transition-colors mt-4 flex justify-center gap-2 items-center shadow-md disabled:bg-blue-400">
+                                            {loading ? <div className="spinner" style={{ width: 20, height: 20, borderTopColor: 'white' }}></div> : <Icon name="zap" size={20} />}
+                                            {loading ? 'Conectando...' : 'Conectar al Servidor SQL'}
+                                        </button>
+                                    </form>
+                                )}
+                            </div>
+                        )}
+
+                        {/* VISTA DE TABLAS (CAMPAÑAS/TIPIS) - Ocultar si estamos en SQL */}
+                        {activeTab !== 'database' && (
+                            <>
+                                <div className="bg-white p-4 rounded shadow mb-6 flex justify-between border-l-4 border-yellow-400">
+                                    <div className="flex gap-3 items-center">
+                                        <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".csv,.txt" className="hidden" />
+                                        <button onClick={() => fileInputRef.current.click()} className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 flex gap-2 shadow"><Icon name="upload" size={18} /> Importar</button>
+                                        <button onClick={handleAddNew} className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 flex gap-2 shadow ml-2"><Icon name="plus" size={18} /> Agregar</button>
+                                        {activeTab === 'typifications' && <select value={filterCampaign} onChange={(e) => setFilterCampaign(e.target.value)} className="bg-gray-50 border rounded px-2 py-2 text-sm ml-4"><option value="">Todas las campañas</option>{uniqueCampaigns.map(c => <option key={c} value={c}>{c}</option>)}</select>}
+                                    </div>
+                                    {/* ✅ ESTE ES EL NUEVO BLOQUE DERECHO: */}
+                                    <div className="flex gap-3 items-center">
+                                        <span className="text-sm font-bold text-gray-600">{filteredData.length} Registros</span>
+
+                                        {/* Lógica del nuevo botón de eliminación por grupo */}
+                                        {activeTab === 'typifications' && filterCampaign && (
+                                            <button
+                                                onClick={handleDeleteByCampaign}
+                                                className="bg-orange-100 text-orange-700 border border-orange-200 px-3 py-2 rounded hover:bg-orange-200 flex gap-2 text-sm shadow font-bold transition-colors"
+                                                title={`Eliminar todas las de ${filterCampaign}`}
+                                            >
+                                                <Icon name="trash" size={16} /> Limpiar {filterCampaign}
+                                            </button>
+                                        )}
+
+                                        <button onClick={handleDeleteAll} className="bg-red-600 text-white px-3 py-2 rounded hover:bg-red-700 flex gap-2 text-sm shadow"><Icon name="trash" size={16} /> Reset Fábrica</button>
+                                    </div>
+                                </div>
+
+                                {importModal.open && (
+                                    <div className={`mb-6 p-6 rounded shadow slide-up border-l-4 ${importModal.invalid && importModal.invalid.length > 0 ? 'bg-red-50 border-red-500' : 'bg-orange-50 border-orange-500'}`}>
+                                        <h3 className={`font-bold mb-2 ${importModal.invalid && importModal.invalid.length > 0 ? 'text-red-800' : 'text-orange-800'}`}>
+                                            {importModal.invalid && importModal.invalid.length > 0 ? 'Atención: Datos Inválidos' : 'Conflictos Detectados'}
+                                        </h3>
+
+                                        <div className="text-sm mb-4 space-y-2">
+                                            {/* [Mejora 1.2] Sección para mostrar errores de tipo (Ranking no numérico) */}
+                                            {importModal.invalid && importModal.invalid.length > 0 && (
+                                                <div className="bg-red-100 p-2 rounded border border-red-200 text-red-900 font-bold flex items-center gap-2">
+                                                    <Icon name="warn" size={16} />
+                                                    <span>{importModal.invalid.length} registros con Ranking no numérico (SERÁN IGNORADOS).</span>
+                                                </div>
+                                            )}
+
+                                            <p className="text-gray-700">
+                                                Resumen Válido: <strong>{importModal.conflicts.length}</strong> duplicados y <strong>{importModal.newItems.length}</strong> nuevos listos para procesar.
+                                            </p>
+                                        </div>
+
+                                        <div className="flex gap-2">
+                                            {/* Botones adaptativos: Permiten proceder ignorando los inválidos */}
+                                            <button onClick={() => resolveConflict('overwrite')} className="px-3 py-1 bg-orange-600 text-white rounded text-sm hover:bg-orange-700 shadow">
+                                                {importModal.invalid && importModal.invalid.length > 0 ? 'Importar Válidos y Sobreescribir' : 'Sobreescribir'}
+                                            </button>
+
+                                            <button onClick={() => resolveConflict('discard')} className="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 shadow">
+                                                {importModal.invalid && importModal.invalid.length > 0 ? 'Importar Válidos (Solo Nuevos)' : 'Solo Nuevos'}
+                                            </button>
+
+                                            <button onClick={() => setImportModal({ ...importModal, open: false })} className="px-3 py-1 bg-white border border-gray-300 rounded text-sm hover:bg-gray-50">
+                                                Cancelar Todo
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+
+                                <div className="bg-white rounded shadow overflow-auto max-h-[65vh]">
+                                    <table className="w-full text-sm text-left text-gray-600">
+                                        <thead className="bg-yellow-100 text-xs uppercase sticky top-0 z-20 shadow-sm">
+                                            <tr>
+                                                {activeTab === 'campaigns' ? <><th className="px-6 py-3">Código</th><th className="px-6 py-3">Nombre</th><th className="px-6 py-3 text-right">Acciones</th></> :
+                                                    <><th className="px-6 py-3">Campaña</th><th className="px-6 py-3">Status</th><th className="px-6 py-3">Detalle</th><th className="px-6 py-3 text-center">Gest.</th><th className="px-6 py-3 text-center">Cerrado</th><th className="px-6 py-3 text-center">Rank</th>
+                                                        {/* --- NUEVAS COLUMNAS ANALÍTICAS --- */}
+                                                        <th className="px-2 py-3 text-center bg-yellow-200/50 text-yellow-900 border-l border-yellow-200" title="¿Hubo contacto?">¿Hub?</th>
+                                                        <th className="px-2 py-3 text-center bg-yellow-200/50 text-yellow-900" title="¿Contacto con Titular?">¿RPC?</th>
+                                                        <th className="px-2 py-3 text-center bg-yellow-200/50 text-yellow-900 border-r border-yellow-200" title="¿Éxito Comercial?">¿Éxito?</th>
+                                                        <th className="px-6 py-3 text-right">Acciones</th></>}
+
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {filteredData.map((item) => {
+                                                const isEditing = (activeTab === 'campaigns' ? item.code : item.id) === editingId;
+                                                return (
+
+
+                                                    <tr key={activeTab === 'campaigns' ? item.code : item.id} className={`border-b hover:bg-yellow-50 ${isEditing ? 'bg-yellow-50 ring-2 ring-blue-100' : ''}`}>
+                                                        {activeTab === 'campaigns' ?
+                                                            <>
+                                                                {/* CAMPAÑAS: Código editable solo si es nuevo */}
+                                                                <td className="px-6 py-4 font-bold text-gray-400">
+                                                                    {item.isNew ? <input className="border rounded px-2 py-1 w-full uppercase" placeholder="CÓDIGO" value={editForm.code} onChange={(e) => handleInputChange('code', e.target.value.toUpperCase())} autoFocus /> : item.code}
+                                                                </td>
+                                                                <td className="px-6 py-4">
+                                                                    {isEditing ? <input className="border rounded px-2 py-1 w-full" value={editForm.name} onChange={(e) => handleInputChange('name', e.target.value)} /> : item.name}
+                                                                </td>
+                                                            </> :
+                                                            <>
+                                                                {/* TIPIFICACIONES: Campaña (Select) y Status editables solo si es nuevo */}
+                                                                <td className="px-6 py-4 font-bold text-gray-400">
+                                                                    {item.isNew ? (
+                                                                        <select className="border rounded px-2 py-1 w-full text-xs" value={editForm.campaign} onChange={(e) => handleInputChange('campaign', e.target.value)}>
+                                                                            <option value="">-- Sel --</option>
+                                                                            {campaigns.map(c => <option key={c.code} value={c.code}>{c.code}</option>)}
+                                                                        </select>
+                                                                    ) : (
+                                                                        <PortalTooltip trigger={item.campaign} content={campaignsMap[item.campaign] || 'ESTADO DE SISTEMA'} />
+                                                                    )}
+                                                                </td>
+                                                                <td className="px-6 py-4 font-mono text-blue-600">
+                                                                    {item.isNew ? <input className="border rounded px-2 py-1 w-full uppercase" placeholder="STATUS" value={editForm.status} onChange={(e) => handleInputChange('status', e.target.value.toUpperCase())} /> : item.status}
+                                                                </td>
+                                                                <td className="px-6 py-4 truncate max-w-xs">{isEditing ? <input className="border rounded px-2 py-1 w-full" value={editForm.detail} onChange={(e) => handleInputChange('detail', e.target.value)} /> : item.detail}</td>
+
+
+                                                                <td className="px-6 py-4 text-center">{isEditing ? <input type="checkbox" checked={editForm.managed === 1} onChange={(e) => handleInputChange('managed', e.target.checked ? 1 : 0)} /> : (item.managed === 1 ? '✓' : '-')}</td>
+                                                                <td className="px-6 py-4 text-center">{isEditing ? <select value={editForm.closedOrAgenda} onChange={(e) => handleInputChange('closedOrAgenda', parseInt(e.target.value))} className="border rounded text-xs"><option value={1}>Sí</option><option value={0}>No</option></select> : (item.closedOrAgenda === 1 ? <span className="bg-green-100 text-green-800 px-2 py-0.5 rounded text-xs font-bold">SI</span> : 'NO')}</td>
+                                                                <td className="px-6 py-4 text-center">{isEditing ? <input type="number" className="border rounded w-12 text-center" value={editForm.ranking} onChange={(e) => handleInputChange('ranking', parseInt(e.target.value))} /> : item.ranking}</td>
+
+                                                                {/* --- NUEVAS COLUMNAS ANALÍTICAS (Step 3) --- */}
+                                                                <td className="px-2 py-4 text-center border-l border-yellow-100 bg-yellow-50/30">
+                                                                    {isEditing ? <input type="checkbox" checked={editForm.isContact === 1} onChange={(e) => handleInputChange('isContact', e.target.checked ? 1 : 0)} className="accent-blue-600" /> : (item.isContact === 1 ? <span className="text-blue-600 font-bold">✓</span> : <span className="text-gray-300">·</span>)}
+                                                                </td>
+                                                                <td className="px-2 py-4 text-center bg-yellow-50/30">
+                                                                    {isEditing ? <input type="checkbox" checked={editForm.isRPC === 1} onChange={(e) => handleInputChange('isRPC', e.target.checked ? 1 : 0)} className="accent-indigo-600" /> : (item.isRPC === 1 ? <span className="text-indigo-600 font-bold">✓</span> : <span className="text-gray-300">·</span>)}
+                                                                </td>
+                                                                <td className="px-2 py-4 text-center border-r border-yellow-100 bg-yellow-50/30">
+                                                                    {isEditing ? <input type="checkbox" checked={editForm.isSuccess === 1} onChange={(e) => handleInputChange('isSuccess', e.target.checked ? 1 : 0)} className="accent-green-600" /> : (item.isSuccess === 1 ? <span className="text-green-600 font-black">★</span> : <span className="text-gray-300">·</span>)}
+                                                                </td>
+                                                            </>
+                                                        }
+                                                        <td className="px-6 py-4 text-right">
+                                                            {isEditing ?
+                                                                <div className="flex justify-end gap-2"><button onClick={saveEditing} className="text-green-600"><Icon name="save" size={18} /></button><button onClick={cancelEditing} className="text-gray-400"><Icon name="x" size={18} /></button></div> :
+                                                                <div className="flex justify-end gap-2"><button onClick={() => startEditing(item)} className="text-blue-500"><Icon name="edit" size={16} /></button><button onClick={() => handleDeleteItem(item)} className="text-red-400"><Icon name="trash" size={16} /></button></div>
+                                                            }
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const HomeView = ({ onNavigate, confirmAction, addToast }) => {
+            const [userModules, setUserModules] = useState([]);
+            const [isManagerOpen, setIsManagerOpen] = useState(false);
+            const [availableFiles, setAvailableFiles] = useState([]);
+
+            // Función para recargar la pantalla leyendo la carpeta
+            const loadActiveModules = async () => {
+                try {
+                    const activeNames = await window.nexusAPI.getActiveModules();
+                    const loadedModules = await Promise.all(activeNames.map(async (name) => {
+                        const code = await window.nexusAPI.readModule(name);
+                        return { id: name, title: name.replace(/\.(js|txt)$/i, '').replace(/_/g, ' '), code, isUser: true, icon: 'package', color: 'bg-indigo-600' };
+                    }));
+                    setUserModules(loadedModules);
+                } catch (e) { console.error("Error cargando módulos", e); }
+            };
+
+            // 1. Cargar módulos al abrir
+            useEffect(() => { loadActiveModules(); }, []);
+
+            // 2. Abrir Gestor: Buscar archivos en la carpeta que no estén instalados
+            const openModuleManager = async () => {
+                const files = await window.nexusAPI.listFiles();
+                const notInstalled = files.filter(f => !userModules.some(m => m.id === f));
+                setAvailableFiles(notInstalled);
+                setIsManagerOpen(true);
+            };
+
+            // 3. Activar archivo
+            const handleInstallModule = async (fileName) => {
+                await window.nexusAPI.toggleModule(fileName, true);
+                addToast(`Módulo "${fileName}" activado`, 'success');
+                setIsManagerOpen(false);
+                loadActiveModules();
+            };
+
+            // 4. Desinstalar (Remueve el módulo de la app, mantiene el archivo físico protegido)
+            const handleDelete = (e, mod) => {
+                e.stopPropagation();
+                confirmAction({
+                    title: 'Desinstalar Módulo',
+                    message: `¿Estás seguro de desinstalar "${mod.title}"?\n\nEl módulo se removerá completamente de la aplicación. (Tu archivo de código seguirá intacto y seguro en la carpeta '/modules').`,
+                    type: 'warning', confirmText: 'Desinstalar',
+                    onConfirm: async () => {
+                        await window.nexusAPI.toggleModule(mod.id, false);
+                        loadActiveModules();
+                        addToast(`Módulo "${mod.title}" desinstalado`, 'info');
+                    }
+                });
+            };
+
+            // Definición de Módulos Fijos (Sistema) + Dinámicos (Usuario)
+            const systemModules = [
+                { id: 'admin', title: 'Administración', desc: 'Gestor de Campañas y Tipificaciones.', icon: 'settings', color: 'bg-yellow-500', status: 'active' }
+            ];
+
+            const allModules = [...systemModules, ...userModules];
+
+            return (
+                <div className="min-h-screen flex flex-col slide-up">
+                    <div className="bg-slate-900 text-white py-16 px-6 text-center">
+                        <h1 className="text-5xl font-bold mb-4">Nexus Strategy CC</h1>
+                        <p className="text-xl text-slate-300">Gestión integral de datos Call Center</p>
+                    </div>
+
+                    <div className="flex-1 bg-gray-100 p-8">
+                        <div className="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-8 -mt-20">
+
+                            {/* Renderizado de Tarjetas */}
+                            {allModules.map(mod => (
+                                <div
+                                    key={mod.id}
+                                    onClick={() => mod.status !== 'construction' && onNavigate(mod.isUser ? 'dynamic_runner' : mod.id, mod.code)}
+                                    className={`relative bg-white rounded-xl shadow-xl overflow-hidden transition-all group ${mod.status === 'construction' ? 'opacity-80 cursor-not-allowed' : 'hover:-translate-y-2 cursor-pointer'}`}
+                                >
+                                    {/* Botón de Eliminar (Solo para módulos de usuario) */}
+                                    {mod.isUser && (
+                                        <button
+                                            onClick={(e) => handleDelete(e, mod)}
+                                            className="absolute top-2 right-2 p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors z-20"
+                                            title="Desinstalar"
+                                        >
+                                            <Icon name="trash" size={18} />
+                                        </button>
+                                    )}
+
+                                    <div className={`h-2 w-full ${mod.color}`}></div>
+                                    <div className="p-8">
+                                        <div className={`w-14 h-14 rounded-lg flex items-center justify-center mb-6 ${mod.color} text-white shadow-lg`}>
+                                            <Icon name={mod.icon} size={28} />
+                                        </div>
+                                        <h3 className="text-xl font-bold text-gray-800 mb-2 truncate">{mod.title}</h3>
+                                        <p className="text-gray-600 text-sm mb-4 line-clamp-3">{mod.desc}</p>
+
+                                        {mod.status === 'construction' && <span className="bg-orange-100 text-orange-800 text-xs px-2 py-1 rounded font-bold">En Construcción</span>}
+                                        {mod.isUser && <span className="bg-indigo-100 text-indigo-800 text-xs px-2 py-1 rounded font-bold">Módulo Externo</span>}
+                                    </div>
+                                </div>
+                            ))}
+
+                            {/* Tarjeta "Agregar Módulo" */}
+                            <div
+                                onClick={openModuleManager}
+                                className="bg-gray-200/50 rounded-xl border-4 border-dashed border-gray-300 flex flex-col items-center justify-center p-8 cursor-pointer hover:bg-gray-200 hover:border-gray-400 transition-all min-h-[250px]"
+                            >
+                                <div className="w-16 h-16 bg-gray-300 rounded-full flex items-center justify-center mb-4 text-gray-500">
+                                    <Icon name="folder" size={32} />
+                                </div>
+                                <h3 className="text-lg font-bold text-gray-600">Gestor de Módulos</h3>
+                                <p className="text-xs text-gray-400 mt-2 text-center">Escanear carpeta /modules</p>
+                            </div>
+
+                        </div>
+                        {/* PANEL GESTOR DE ARCHIVOS FÍSICOS */}
+                        {isManagerOpen && (
+                            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm fade-in">
+                                <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-6 scale-up">
+                                    <div className="flex justify-between items-center mb-4 border-b pb-3">
+                                        <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                                            <Icon name="folder" size={24} className="text-indigo-600" />
+                                            Archivos Detectados
+                                        </h3>
+                                        <button onClick={() => setIsManagerOpen(false)} className="text-gray-400 hover:text-red-500"><Icon name="x" size={24} /></button>
+                                    </div>
+                                    <div className="max-h-60 overflow-y-auto rounded-lg p-2 bg-slate-50 border border-slate-200">
+                                        {availableFiles.length === 0 ? (
+                                            <p className="text-sm text-center text-slate-500 py-6 font-medium">Todos los archivos de la carpeta ya están activos o la carpeta está vacía.</p>
+                                        ) : (
+                                            availableFiles.map(file => (
+                                                <div key={file} className="flex justify-between items-center bg-white p-3 mb-2 rounded border border-slate-200 shadow-sm hover:border-indigo-300 transition-colors">
+                                                    <span className="font-mono text-sm font-bold text-slate-700">{file}</span>
+                                                    <button onClick={() => handleInstallModule(file)} className="bg-indigo-600 text-white px-4 py-1.5 rounded text-xs font-bold hover:bg-indigo-700 shadow-md">Activar</button>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+                                    <p className="text-xs text-slate-400 mt-4 text-center">Coloca tus archivos .js ofuscados en la carpeta <strong>/modules</strong> para que aparezcan aquí.</p>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                    <footer className="bg-slate-900 text-slate-500 py-8 text-center border-t border-slate-800">
+                        <p>Nexus Strategy CC &copy; 2025</p>
+                        <p className="text-xs mt-2 opacity-60">por Darwin Diamon</p>
+                    </footer>
+                </div>
+            );
+        };
+
+        /* --- PASO 3: COMPONENTE CARGADOR DINÁMICO (EL SANDBOX - VERSIÓN FINAL) --- */
+        const DynamicModuleLoader = ({ moduleCode, dependencies }) => {
+            const [ModuleComponent, setModuleComponent] = useState(null);
+            const [error, setError] = useState(null);
+
+            useEffect(() => {
+                if (!moduleCode) return;
+                try {
+                    // 1. Transpilación
+                    let transpiled = Babel.transform(moduleCode, { presets: ['react'] }).code;
+
+                    // 2. Limpiar el receptor global por seguridad
+                    window.NexusActiveModule = null;
+
+                    // 3. Ejecutar el código ofuscado
+                    // El ofuscador hará su magia y guardará la función en window.NexusActiveModule
+                    const evaluateModule = new Function(transpiled);
+                    evaluateModule();
+
+                    // 4. Extraer la fábrica (tu función)
+                    const ModuleFactory = window.NexusActiveModule;
+
+                    // Validación por si se nos olvida poner "window.NexusActiveModule" en el futuro
+                    if (typeof ModuleFactory !== 'function') {
+                        throw new Error("El código no asignó la función a window.NexusActiveModule");
+                    }
+
+                    // 5. Inyección de Dependencias
+                    const RealComponent = ModuleFactory(dependencies);
+
+                    if (typeof RealComponent !== 'function') throw new Error("El módulo no retornó un componente válido.");
+
+                    setModuleComponent(() => RealComponent);
+                } catch (err) {
+                    console.error("Fallo al compilar módulo:", err);
+                    setError(err.message);
+                }
+            }, [moduleCode]);
+
+            if (error) return (
+                <div className="p-10 max-w-2xl mx-auto mt-10 bg-red-50 border border-red-200 rounded-lg text-center">
+                    <div className="text-red-500 mb-2"><Icon name="alert" size={32} className="mx-auto" /></div>
+                    <h3 className="font-bold text-red-800">Error Crítico en Módulo</h3>
+                    <p className="text-sm text-red-600 mt-2 font-mono bg-white p-2 rounded border border-red-100">{error}</p>
+                </div>
+            );
+
+            if (!ModuleComponent) return (
+                <div className="flex flex-col items-center justify-center h-64 text-gray-400">
+                    <div className="spinner mb-3"></div>
+                    <span>Cargando núcleo del módulo...</span>
+                </div>
+            );
+
+            return <ModuleComponent />;
+        };
+
+        /* --- PASO 4: APP PRINCIPAL (ORQUESTADOR) --- */
+        const App = () => {
+            const [view, setView] = useState('home');
+            const [activeModuleCode, setActiveModuleCode] = useState(null);
+            const [toasts, setToasts] = useState([]);
+            const [dialog, setDialog] = useState({ isOpen: false, config: {} });
+
+            const addToast = (msg, type = 'info') => { const id = Date.now(); setToasts(p => [...p, { id, message: msg, type }]); };
+            const removeToast = (id) => setToasts(p => p.filter(t => t.id !== id));
+            const confirmAction = (config) => setDialog({ isOpen: true, config });
+
+            const nexusContext = {
+                React,
+                useState,
+                useEffect,
+                useMemo,
+                useRef,
+                ui: { Icon, PortalTooltip, Toast, MultiSelect, StatusBar },
+                utils: { addToast, readFile, confirmAction },
+                db: dbService,
+                goHome: () => setView('home')
+            };
+
+            return (
+                <div className="antialiased text-slate-800 bg-slate-50 min-h-screen font-inter">
+                    {view === 'home' && (
+                        <HomeView
+                            onNavigate={(target, payload) => {
+                                if (target === 'dynamic_runner') {
+                                    setActiveModuleCode(payload);
+                                    setView('dynamic_runner');
+                                } else {
+                                    setView(target);
+                                }
+                            }}
+                            confirmAction={confirmAction}
+                            addToast={addToast}
+                        />
+                    )}
+
+                    {view === 'admin' && <AdminModule addToast={addToast} onNavigateHome={() => setView('home')} confirmAction={confirmAction} />}
+
+
+                    {view === 'dynamic_runner' && (
+                        <div className="slide-up min-h-screen bg-gray-50">
+                            <div className="bg-white border-b px-6 py-3 flex justify-between items-center shadow-sm sticky top-0 z-40">
+                                <span className="text-xs font-bold text-indigo-600 uppercase tracking-wider">Módulo Externo</span>
+                                <button onClick={() => setView('home')} className="text-sm text-gray-600 hover:text-gray-900 flex items-center gap-1">
+                                    <Icon name="x" size={16} /> Cerrar Módulo
+                                </button>
+                            </div>
+                            <DynamicModuleLoader
+                                moduleCode={activeModuleCode}
+                                dependencies={nexusContext}
+                            />
+                        </div>
+                    )}
+
+                    <GlobalConfirmDialog isOpen={dialog.isOpen} config={dialog.config} onClose={() => setDialog({ ...dialog, isOpen: false })} />
+                    <div className="fixed top-0 right-0 p-4 z-[110] flex flex-col gap-2 pointer-events-none">
+                        {toasts.map(t => <div key={t.id} className="pointer-events-auto"><Toast message={t.message} type={t.type} onClose={() => removeToast(t.id)} /></div>)}
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+
+
+    </script>
+</body>
+
+</html>

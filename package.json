@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "nexus-strategy-cc",
   "version": "1.0.0",
   "description": "Gestor integral de datos Call Center - Portable",
@@ -7,6 +7,7 @@
   "scripts": {
     "start": "electron .",
     "obfuscate": "javascript-obfuscator src --output obf-src",
+    "protect:modules": "javascript-obfuscator src-modules --output modules --string-array-encoding base64 --compact true --simplify true",
     "build:portable": "electron-builder --win portable"
   },
   "build": {
@@ -23,7 +24,7 @@
     }
   },
   "dependencies": {
-    "mssql": "^10.0.2",
+    "mssql": "^10.0.4",
     "node-machine-id": "^1.1.12"
   },
   "devDependencies": {
