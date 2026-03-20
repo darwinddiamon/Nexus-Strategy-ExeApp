@@ -1,0 +1,7 @@
+﻿node_modules/
+dist/
+obf-src/
+data/
+.env
+
+Nexus_App_Html/

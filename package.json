@@ -1,0 +1,34 @@
+﻿{
+  "name": "nexus-strategy-cc",
+  "version": "1.0.0",
+  "description": "Gestor integral de datos Call Center - Portable",
+  "main": "src/main.js",
+  "author": "Darwin Diamon",
+  "scripts": {
+    "start": "electron .",
+    "obfuscate": "javascript-obfuscator src --output obf-src",
+    "build:portable": "electron-builder --win portable"
+  },
+  "build": {
+    "appId": "com.darwindiamon.nexuscc",
+    "productName": "Nexus Strategy CC",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": "portable"
+    },
+    "portable": {
+      "artifactName": "Nexus.exe"
+    }
+  },
+  "dependencies": {
+    "mssql": "^10.0.2",
+    "node-machine-id": "^1.1.12"
+  },
+  "devDependencies": {
+    "electron": "^29.0.0",
+    "electron-builder": "^24.13.3",
+    "javascript-obfuscator": "^4.1.0"
+  }
+}
