@@ -1,3 +1,4 @@
+window.NexusModuleMeta = { icon: 'link', color: 'bg-violet-600', title: 'Cruce Avanzado' };
 window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome }) => {
 
     const { Icon } = ui;
@@ -1154,8 +1155,7 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                                 </div>
                             )}
                         </>
-                        /* Fin del Modo Archivo e Inicio del Modo SQL */
-                    ) : (
+                    ) : ( /* Modo SQL */
                         <div className="fade-in flex flex-col gap-3">
                             <textarea
                                 className="preview-box w-full h-40"
@@ -1208,7 +1208,7 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                 {/* PASO 2: DEFINIR LLAVES Y CONDICIONES */}
                 {step === 2 && (
                     <div className="card">
-                        <h2 style={{ textAlign: 'center', color: 'var(--primary)', marginBottom: '1rem' }}>Paso 2: Lógica de Cruce</h2>
+                        <h2 style={{ textAlign: 'center', color: 'var(--primary)', marginBottom: '1rem', fontSize: '1.8rem', fontWeight: '800' }}>Paso 2: Lógica de Cruce</h2>
 
                         {/* LLAVE PRINCIPAL (INDEX) */}
                         <div style={{ background: '#f5f3ff', padding: '1.5rem', borderRadius: '12px', border: '1px solid #ddd6fe', marginBottom: '2rem' }}>
@@ -1456,7 +1456,7 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
 
                 {step === 4 && (
                     <div className="card">
-                        <h2 style={{ textAlign: 'center', color: 'var(--primary)', marginBottom: '1rem' }}>Paso 4: Exportación Avanzada</h2>
+                        <h2 style={{ textAlign: 'center', color: 'var(--primary)', marginBottom: '1rem', fontSize: '1.8rem', fontWeight: '800' }}>Paso 4: Exportación Avanzada</h2>
 
                         {/* TABS */}
                         <div className="output-tabs">

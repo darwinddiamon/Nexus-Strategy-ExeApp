@@ -1,35 +1,39 @@
 {
-  "name": "nexus-strategy-cc",
-  "version": "1.0.0",
-  "description": "Gestor integral de datos Call Center - Portable",
-  "main": "src/main.js",
-  "author": "Darwin Diamon",
-  "scripts": {
-    "start": "electron .",
-    "obfuscate": "javascript-obfuscator src --output obf-src",
-    "protect:modules": "javascript-obfuscator src-modules --output modules --string-array-encoding base64 --compact true --simplify true",
-    "build:portable": "electron-builder --win portable"
-  },
-  "build": {
-    "appId": "com.darwindiamon.nexuscc",
-    "productName": "Nexus Strategy CC",
-    "directories": {
-      "output": "dist"
+    "name": "nexus-strategy-cc",
+    "version": "1.0.0",
+    "description": "Gestor integral de datos Call Center - Portable",
+    "main": "src/main.js",
+    "author": "Darwin Diamon",
+    "scripts": {
+        "start": "electron .",
+        "obfuscate": "javascript-obfuscator src --output obf-src",
+        "protect:modules": "babel src-modules --out-dir src-modules-built --plugins @babel/plugin-transform-react-jsx && javascript-obfuscator src-modules-built --output modules --string-array-encoding base64 --compact true --simplify true",
+        "build:portable": "electron-builder --win portable"
     },
-    "win": {
-      "target": "portable"
+    "build": {
+        "appId": "com.darwindiamon.nexuscc",
+        "productName": "Nexus Strategy CC",
+        "directories": {
+            "output": "dist"
+        },
+        "win": {
+            "target": "portable"
+        },
+        "portable": {
+            "artifactName": "Nexus.exe"
+        }
     },
-    "portable": {
-      "artifactName": "Nexus.exe"
+    "dependencies": {
+        "mssql": "^10.0.4",
+        "mysql2": "^3.20.0",
+        "node-machine-id": "^1.1.12"
+    },
+    "devDependencies": {
+        "@babel/cli": "^7.28.6",
+        "@babel/core": "^7.29.0",
+        "@babel/plugin-transform-react-jsx": "^7.28.6",
+        "electron": "^29.0.0",
+        "electron-builder": "^24.13.3",
+        "javascript-obfuscator": "^4.1.0"
     }
-  },
-  "dependencies": {
-    "mssql": "^10.0.4",
-    "node-machine-id": "^1.1.12"
-  },
-  "devDependencies": {
-    "electron": "^29.0.0",
-    "electron-builder": "^24.13.3",
-    "javascript-obfuscator": "^4.1.0"
-  }
 }

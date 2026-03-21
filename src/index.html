@@ -684,7 +684,8 @@
             const fileInputRef = useRef(null);
 
             // NUEVO: Estados para SQL Volátil
-            const [sqlForm, setSqlForm] = useState({ server: '', database: '', user: '', password: '' });
+            const [sqlEngine, setSqlEngine] = useState('sqlserver');
+            const [sqlForm, setSqlForm] = useState({ server: '', port: '3306', database: '', user: '', password: '' });
             const [sqlConnected, setSqlConnected] = useState(false);
 
             // Manejador de Conexión SQL
@@ -694,13 +695,14 @@
                 try {
                     // Construimos la configuración base (sin obligar la BBDD)
                     const dbConfig = {
+                        engine: sqlEngine,
                         server: sqlForm.server,
+                        port: parseInt(sqlForm.port) || 3306,
                         user: sqlForm.user,
                         password: sqlForm.password,
                         options: { encrypt: false, trustServerCertificate: true }
                     };
 
-                    // Solo agregamos el parámetro si escribiste algo en el campo
                     if (sqlForm.database && sqlForm.database.trim() !== '') {
                         dbConfig.database = sqlForm.database.trim();
                     }
@@ -723,8 +725,8 @@
             // Manejador de Desconexión
             const handleSqlDisconnect = () => {
                 setSqlConnected(false);
-                setSqlForm({ server: '', database: '', user: '', password: '' });
-                addToast('Desconectado de SQL Server', 'info');
+                setSqlForm({ server: '', port: '3306', database: '', user: '', password: '' });
+                addToast('Desconectado', 'info');
             };
 
             useEffect(() => { loadData(); setEditingId(null); setFilterCampaign(''); }, [activeTab]);
@@ -958,7 +960,11 @@
                                     <div className={`w-20 h-20 mx-auto rounded-full flex items-center justify-center mb-4 shadow-inner transition-colors ${sqlConnected ? 'bg-green-100 text-green-600' : 'bg-slate-100 text-slate-400'}`}>
                                         <Icon name="server" size={40} />
                                     </div>
-                                    <h3 className="text-2xl font-bold text-gray-800">Motor SQL Server</h3>
+                                    <h3 className="text-2xl font-bold text-gray-800">{sqlEngine === 'sqlserver' ? 'Motor SQL Server' : 'Motor MySQL'}</h3>
+                                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', margin: '0.75rem 0' }}>
+                                        <button type="button" onClick={() => { setSqlEngine('sqlserver'); setSqlConnected(false); }} style={{ padding: '6px 18px', borderRadius: '8px', fontWeight: 'bold', fontSize: '0.85rem', border: '2px solid #3b82f6', background: sqlEngine === 'sqlserver' ? '#3b82f6' : 'white', color: sqlEngine === 'sqlserver' ? 'white' : '#3b82f6', cursor: 'pointer' }}>SQL Server</button>
+                                        <button type="button" onClick={() => { setSqlEngine('mysql'); setSqlConnected(false); }} style={{ padding: '6px 18px', borderRadius: '8px', fontWeight: 'bold', fontSize: '0.85rem', border: '2px solid #f97316', background: sqlEngine === 'mysql' ? '#f97316' : 'white', color: sqlEngine === 'mysql' ? 'white' : '#f97316', cursor: 'pointer' }}>MySQL</button>
+                                    </div>
                                     <p className="text-sm text-gray-500 mt-2">
                                         Las credenciales se guardan <strong>solo en la RAM</strong>. Al cerrar la aplicación, la conexión se destruye por seguridad.
                                     </p>
@@ -980,6 +986,12 @@
                                             <div>
                                                 <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Servidor (IP o Host)</label>
                                                 <input type="text" required value={sqlForm.server} onChange={e => setSqlForm({ ...sqlForm, server: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow" placeholder="ej: 192.168.1.100" />
+                                                {sqlEngine === 'mysql' && (
+                                                    <div style={{ marginTop: '0.75rem' }}>
+                                                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Puerto</label>
+                                                        <input type="number" value={sqlForm.port} onChange={e => setSqlForm({ ...sqlForm, port: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-orange-500 outline-none transition-shadow" placeholder="3306" />
+                                                    </div>
+                                                )}
                                             </div>
                                             <div>
                                                 <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Base de Datos <span className="text-gray-400 font-normal">(Opcional)</span></label>
@@ -1166,7 +1178,12 @@
                     const activeNames = await window.nexusAPI.getActiveModules();
                     const loadedModules = await Promise.all(activeNames.map(async (name) => {
                         const code = await window.nexusAPI.readModule(name);
-                        return { id: name, title: name.replace(/\.(js|txt)$/i, '').replace(/_/g, ' '), code, isUser: true, icon: 'package', color: 'bg-indigo-600' };
+                        try { window.NexusModuleMeta = null; eval(code.split('window.NexusActiveModule')[0]); } catch (e) { }
+                        const meta = window.NexusModuleMeta || {};
+                        const icon = meta.icon || 'package';
+                        const color = meta.color || 'bg-indigo-600';
+                        const title = meta.title || name.replace(/\.(js|txt)$/i, '').replace(/_/g, ' ');
+                        return { id: name, title, code, isUser: true, icon, color };
                     }));
                     setUserModules(loadedModules);
                 } catch (e) { console.error("Error cargando módulos", e); }

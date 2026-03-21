@@ -1,7 +1,8 @@
 const { app, BrowserWindow, ipcMain } = require('electron'); // Añadimos ipcMain
 const path = require('path');
 const fs = require('fs');
-const sql = require('mssql'); // Motor de SQL
+const sql = require('mssql');   // Motor SQL Server
+const mysql = require('mysql2/promise'); // Motor MySQL
 
 // --- 1. CONFIGURACIÓN PORTABLE ---
 const isDev = !app.isPackaged;
@@ -17,7 +18,8 @@ app.setPath('userData', dataPath);
 // --- 2. GESTIÓN DE ESTADOS (Volátil vs Persistente) ---
 
 // A. VOLÁTIL: Esto vive en la RAM. Al cerrar la app, desaparece.
-let sqlPool = null;
+let sqlPool = null;   // SQL Server
+let mysqlPool = null; // MySQL
 
 // B. PERSISTENTE: Esto vive en un archivo físico en la carpeta /data.
 const settingsPath = path.join(dataPath, 'settings.json');
@@ -37,9 +39,32 @@ function getSettings() {
 // Manejador para conectar a SQL (Solo en RAM, no guarda nada)
 ipcMain.handle('connect-sql', async (event, config) => {
     try {
-        if (sqlPool) await sqlPool.close();
-        sqlPool = await sql.connect(config);
-        return { success: true };
+        if (config.engine === 'mysql') {
+            if (mysqlPool) await mysqlPool.end();
+            mysqlPool = await mysql.createPool({
+                host: config.server,
+                port: config.port || 3306,
+                database: config.database || undefined,
+                user: config.user,
+                password: config.password,
+                waitForConnections: true
+            });
+            // Test de conexión
+            const conn = await mysqlPool.getConnection();
+            conn.release();
+            return { success: true };
+        } else {
+            if (sqlPool) await sqlPool.close();
+            const dbConfig = {
+                server: config.server,
+                user: config.user,
+                password: config.password,
+                options: { encrypt: false, trustServerCertificate: true }
+            };
+            if (config.database && config.database.trim() !== '') dbConfig.database = config.database.trim();
+            sqlPool = await sql.connect(dbConfig);
+            return { success: true };
+        }
     } catch (err) {
         return { success: false, error: err.message };
     }
@@ -81,11 +106,16 @@ ipcMain.handle('read-module', async (event, fileName) => {
 
 // Manejador para ejecutar consultas SQL
 ipcMain.handle('execute-sql', async (event, query) => {
-    if (!sqlPool) return { success: false, error: 'No hay conexión activa al motor SQL.' };
     try {
-        const result = await sqlPool.request().query(query);
-        // Devolvemos solo el recordset (las filas) para no sobrecargar el puente
-        return { success: true, data: result.recordset };
+        if (mysqlPool) {
+            const [rows] = await mysqlPool.query(query);
+            return { success: true, data: rows };
+        } else if (sqlPool) {
+            const result = await sqlPool.request().query(query);
+            return { success: true, data: result.recordset };
+        } else {
+            return { success: false, error: 'No hay conexión activa al motor SQL.' };
+        }
     } catch (err) {
         return { success: false, error: err.message };
     }
@@ -114,4 +144,3 @@ app.whenReady().then(createWindow);
 app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
 });
-
