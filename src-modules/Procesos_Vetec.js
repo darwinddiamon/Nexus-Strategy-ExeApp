@@ -48,6 +48,25 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
         }
 
         return { ws, headers, cleanData };
+
+    };
+
+    // ========================================================================
+    // UTILIDAD: Construcción de queries UNION ALL por lista vigente
+    // Cada número de lista genera su propio bloque SELECT + JOIN custom_XXXX
+    // No se usa list_id en WHERE: el número de lista ES la tabla custom_XXXX
+    // ========================================================================
+    const buildUnionAllQuery = (listasStr, selectFields, fecha, label) => {
+        const nums = listasStr.split(',').map(s => s.trim()).filter(Boolean);
+        if (nums.length === 0) return null;
+        return nums.map(n =>
+            `-- Lista ${n}${label ? ' (' + label + ')' : ''}\nSELECT ${selectFields}\nFROM vicidial_list vl JOIN custom_${n} c ON vl.lead_id = c.lead_id\nWHERE cast(entry_date as DATE) >= '${fecha}'`
+        ).join('\n\nunion all\n\n');
+    };
+
+    const getPrimerDiaMesGlobal = () => {
+        const now = new Date();
+        return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
     };
 
     // ========================================================================
@@ -301,7 +320,8 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
         const [excludeList, setExcludeList] = useState(true);
         const [exclusionFile, setExclusionFile] = useState(null);
         const [exclusionSqlMode, setExclusionSqlMode] = useState(false);
-        const [exclusionSqlQuery, setExclusionSqlQuery] = useState('');
+        const [exclusionListasRdr, setExclusionListasRdr] = useState('');
+        const [exclusionSqlQuery, setExclusionSqlQuery] = useState('-- ⚠️ Ingresa la(s) lista(s) vigente(s) RDR para generar la query.');
         const [exclusionSqlData, setExclusionSqlData] = useState(null);
         const [outputFormat, setOutputFormat] = useState('xlsx');
         const [isProcessing, setIsProcessing] = useState(false);
@@ -309,6 +329,9 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
         const [priorizarCel, setPriorizarCel] = useState(true);
         const [pendientesHojas, setPendientesHojas] = useState([]);
         const [sheetSelections, setSheetSelections] = useState({});
+        const [refSqlMode, setRefSqlMode] = useState(false);
+        const [refSqlQuery, setRefSqlQuery] = useState('');
+        const [refSqlData, setRefSqlData] = useState(null);
 
         // --- MOTOR DE LIMPIEZA INTERNO ---
         const cleanRut = (str) => { if (!str) return ''; return String(str).toUpperCase().split('-')[0].replace(/[^0-9]/g, ''); };
@@ -373,7 +396,12 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                 } else if (['referido_sae_web', 'referido_sae', 'referido_cc'].includes(loadType)) {
                     const targetRuts = new Set(inputText.split(/[\n,; \t]+/).map(r => cleanRut(r)).filter(r => r.length >= 6));
                     if (targetRuts.size === 0) throw new Error("No hay RUTs válidos para buscar.");
-                    const baseData = await getFullData(mainFiles[0]);
+                    let baseData = [];
+                    if (refSqlMode && refSqlData) {
+                        baseData = refSqlData;
+                    } else {
+                        baseData = await getFullData(mainFiles[0]);
+                    }
                     unifiedData = baseData.filter(row => targetRuts.has(cleanRut(row.RUT || row.rut || row.vendor_lead_code || row.postal_code || '')));
                 } else if (loadType === 'manual') {
                     unifiedData = manualRows.filter(r => r.rut.trim() !== '');
@@ -556,6 +584,10 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
         const isProcessDisabled = () => {
             if (loadType === 'masivo') return mainFiles.length === 0;
             if (loadType === 'manual') return !manualRows.some(row => row.rut.trim() !== '');
+            if (['referido_sae_web', 'referido_sae', 'referido_cc'].includes(loadType)) {
+                if (refSqlMode) return !refSqlData || inputText.trim() === '';
+                return mainFiles.length === 0 || inputText.trim() === '';
+            }
             return mainFiles.length === 0 || inputText.trim() === '';
         };
 
@@ -576,9 +608,9 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                             <option value="manual">Ingreso Manual (RUTs o Texto)</option>
                         </select>
                     </div>
-                    {loadType !== 'manual' && (
+                    {loadType === 'masivo' && (
                         <div className="border-2 border-dashed border-blue-300 rounded-lg p-8 text-center bg-blue-50 hover:bg-blue-100 transition-colors relative animate-fade-in">
-                            <input type="file" multiple={loadType === 'masivo'} accept=".csv,.txt,.xlsx,.xls" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" onChange={(e) => setMainFiles(Array.from(e.target.files))} />
+                            <input type="file" multiple accept=".csv,.txt,.xlsx,.xls" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" onChange={(e) => setMainFiles(Array.from(e.target.files))} />
                             <Icon name="upload-cloud" size={32} className="mx-auto text-blue-500 mb-2" />
                             <p className="text-sm font-medium text-blue-800">{mainFiles.length > 0 ? `${mainFiles.length} archivo(s) listo(s)` : 'Haz clic o arrastra los archivos aquí'}</p>
                         </div>
@@ -586,11 +618,37 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                     {['referido_sae_web', 'referido_sae', 'referido_cc'].includes(loadType) && (
                         <div className="flex flex-col gap-4 animate-fade-in">
                             <div className="border border-purple-200 rounded-lg p-4 bg-purple-50">
-                                <label className="block text-sm font-bold text-purple-800 mb-2">Pega los RUTs a buscar:</label>
+                                <label className="block text-sm font-bold text-purple-800 mb-2">A. Pega los RUTs a buscar:</label>
                                 <textarea className="w-full h-24 p-3 border border-purple-300 rounded focus:border-purple-500 outline-none text-sm font-mono resize-none bg-white" placeholder="Ej: 12345678" value={inputText} onChange={(e) => setInputText(e.target.value)}></textarea>
+                            </div>
+                            <div className="flex flex-col gap-2">
+                                <div style={{ display: 'flex', gap: '6px' }}>
+                                    <button type="button" onClick={() => { setRefSqlMode(false); setRefSqlData(null); }} style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.75rem', border: '2px solid #9333ea', background: !refSqlMode ? '#9333ea' : 'white', color: !refSqlMode ? 'white' : '#9333ea', cursor: 'pointer' }}>📂 Archivo</button>
+                                    <button type="button" onClick={() => { setRefSqlMode(true); setMainFiles([]); }} style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.75rem', border: '2px solid #3b82f6', background: refSqlMode ? '#3b82f6' : 'white', color: refSqlMode ? 'white' : '#3b82f6', cursor: 'pointer' }}>⚡ SQL</button>
+                                </div>
+                                {!refSqlMode ? (
+                                    <div className="border-2 border-dashed border-purple-300 rounded-lg p-6 text-center bg-white hover:bg-purple-50 transition-colors relative cursor-pointer">
+                                        <input type="file" accept=".csv,.txt,.xlsx,.xls" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" onChange={(e) => setMainFiles(Array.from(e.target.files))} />
+                                        <Icon name="file-search" size={24} className="mx-auto text-purple-500 mb-2" />
+                                        <p className="text-sm font-medium text-purple-800">{mainFiles.length > 0 ? <span className="font-bold">B. Archivo base listo: {mainFiles[0].name}</span> : 'B. Sube el archivo de donde se extraerán'}</p>
+                                    </div>
+                                ) : (
+                                    <div className="flex flex-col gap-2">
+                                        <textarea style={{ width: '100%', minHeight: '80px', padding: '0.5rem', border: '2px solid #3b82f6', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.8rem', resize: 'vertical', boxSizing: 'border-box' }} value={refSqlQuery} onChange={e => setRefSqlQuery(e.target.value)} placeholder="SELECT RUT, NOMBRES... FROM tabla WHERE..." />
+                                        <button type="button" style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.8rem', background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', alignSelf: 'flex-start' }} onClick={async () => {
+                                            if (!refSqlQuery.trim()) return;
+                                            const r = await window.nexusAPI.executeSQL(refSqlQuery);
+                                            if (!r.success) { addToast('Error SQL: ' + r.error, 'error'); return; }
+                                            setRefSqlData(r.data);
+                                            addToast(`${r.data.length} registros cargados desde SQL.`, 'success');
+                                        }}>⚡ Ejecutar</button>
+                                        {refSqlData && <p className="text-xs text-emerald-600 font-bold">✓ {refSqlData.length} registros listos para cruce</p>}
+                                    </div>
+                                )}
                             </div>
                         </div>
                     )}
+
                     {loadType === 'manual' && (
                         <div className="border border-gray-300 rounded-lg p-4 bg-gray-50 animate-fade-in overflow-x-auto">
                             <div className="flex items-center gap-2 mb-3">
@@ -698,10 +756,19 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                                 </div>
                             ) : (
                                 <div className="flex flex-col gap-2">
-                                    <textarea style={{ width: '100%', minHeight: '80px', padding: '0.5rem', border: '2px solid #3b82f6', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.8rem', resize: 'vertical', boxSizing: 'border-box' }} value={exclusionSqlQuery} onChange={e => setExclusionSqlQuery(e.target.value)} placeholder="SELECT RUT FROM tabla WHERE..." />
+                                    <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-2 flex flex-col gap-1">
+                                        <label className="text-xs font-bold text-indigo-800">📋 Lista(s) vigente(s) RDR <span className="text-red-500">*</span></label>
+                                        <input type="text" value={exclusionListasRdr} onChange={e => { setExclusionListasRdr(e.target.value); setExclusionSqlData(null); const q = buildUnionAllQuery(e.target.value, '*', getPrimerDiaMesGlobal(), 'RDR'); setExclusionSqlQuery(q ? `-- Resultante RDR\n${q};` : '-- ⚠️ Ingresa la(s) lista(s) vigente(s) RDR para generar la query.'); }} placeholder="Ej: 1104, 1105" className="w-full border border-indigo-300 rounded p-1.5 text-sm font-mono outline-none focus:border-indigo-500 bg-white" />
+                                        <p className="text-[10px] text-indigo-600">Separadas por coma. La fecha se ajusta al primer día del mes en curso.</p>
+                                    </div>
+                                    <div className="bg-amber-50 border border-amber-200 rounded p-2 text-[10px] text-amber-800 font-bold">⚠️ Fecha calculada automáticamente al primer día del mes. Puedes editar la query si necesitas otra fecha.</div>
+                                    <textarea style={{ width: '100%', minHeight: '80px', padding: '0.5rem', border: '2px solid #3b82f6', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.75rem', resize: 'vertical', boxSizing: 'border-box' }} value={exclusionSqlQuery} onChange={e => setExclusionSqlQuery(e.target.value)} />
                                     <button type="button" style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.8rem', background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', alignSelf: 'flex-start' }} onClick={async () => {
-                                        if (!exclusionSqlQuery.trim()) return;
-                                        const r = await window.nexusAPI.executeSQL(exclusionSqlQuery);
+                                        if (!exclusionListasRdr.trim()) { addToast('⚠️ Ingresa al menos una lista vigente RDR antes de ejecutar.', 'error'); return; }
+                                        const qFinalRdr = buildUnionAllQuery(exclusionListasRdr, '*', getPrimerDiaMesGlobal(), 'RDR');
+                                        if (!qFinalRdr) return;
+                                        const queryRdr = `-- Resultante RDR\n${qFinalRdr};`;
+                                        const r = await window.nexusAPI.executeSQL(queryRdr);
                                         if (!r.success) { addToast('Error SQL: ' + r.error, 'error'); return; }
                                         setExclusionSqlData(r.data);
                                         addToast(`${r.data.length} registros cargados desde SQL.`, 'success');
@@ -755,7 +822,8 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
         const [excludeList, setExcludeList] = useState(true);
         const [exclusionFile, setExclusionFile] = useState(null);
         const [exclusionSqlMode, setExclusionSqlMode] = useState(false);
-        const [exclusionSqlQuery, setExclusionSqlQuery] = useState('');
+        const [exclusionListasSaeWeb, setExclusionListasSaeWeb] = useState('');
+        const [exclusionSqlQuery, setExclusionSqlQuery] = useState('-- ⚠️ Ingresa la(s) lista(s) vigente(s) SAE_WEB para generar la query.');
         const [exclusionSqlData, setExclusionSqlData] = useState(null);
         const [outputFormat, setOutputFormat] = useState('xlsx');
         const [isProcessing, setIsProcessing] = useState(false);
@@ -763,6 +831,9 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
         const [priorizarCel, setPriorizarCel] = useState(true);
         const [pendientesHojas, setPendientesHojas] = useState([]);
         const [sheetSelections, setSheetSelections] = useState({});
+        const [refSqlMode, setRefSqlMode] = useState(false);
+        const [refSqlQuery, setRefSqlQuery] = useState('');
+        const [refSqlData, setRefSqlData] = useState(null);
 
         // --- MANEJADORES VISUALES ---
         const handleMainFiles = async (e) => {
@@ -894,6 +965,10 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
             if (loadType === 'masivo') return mainFiles.length === 0;
             if (loadType === 'manual') return !manualRows.some(row => row.rut.trim() !== '');
             // Si es referido (cualquier otro), necesita TANTO el archivo COMO los RUTs
+            if (['referido_cc', 'referido_sae', 'referido_rdr_web'].includes(loadType)) {
+                if (refSqlMode) return !refSqlData || inputText.trim() === '';
+                return mainFiles.length === 0 || inputText.trim() === '';
+            }
             return mainFiles.length === 0 || inputText.trim() === '';
         };
 
@@ -993,8 +1068,13 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                         setIsProcessing(false); return;
                     }
 
-                    // Leemos el archivo base único
-                    const baseData = await getFullData(mainFiles[0]);
+                    // Leemos la base desde archivo o SQL
+                    let baseData = [];
+                    if (refSqlMode && refSqlData) {
+                        baseData = refSqlData;
+                    } else {
+                        baseData = await getFullData(mainFiles[0]);
+                    }
 
                     // Filtramos: Solo nos quedamos con las filas cuyos RUTs coincidan con tu lista
                     unifiedData = baseData.filter(row => {
@@ -1289,20 +1369,30 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                                     onChange={(e) => setInputText(e.target.value)}
                                 ></textarea>
                             </div>
-
-                            <div className="border-2 border-dashed border-purple-300 rounded-lg p-6 text-center bg-white hover:bg-purple-50 transition-colors cursor-pointer relative">
-                                <input
-                                    type="file"
-                                    accept=".csv,.txt,.xlsx,.xls"
-                                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                                    onChange={handleMainFiles}
-                                />
-                                <Icon name="file-search" size={24} className="mx-auto text-purple-500 mb-2" />
-                                <p className="text-sm font-medium text-purple-800">
-                                    {mainFiles.length > 0
-                                        ? <span className="font-bold">B. Archivo base listo: {mainFiles[0].name}</span>
-                                        : 'B. Sube el archivo de donde se extraerán estos referidos'}
-                                </p>
+                            <div className="flex flex-col gap-2">
+                                <div style={{ display: 'flex', gap: '6px' }}>
+                                    <button type="button" onClick={() => { setRefSqlMode(false); setRefSqlData(null); }} style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.75rem', border: '2px solid #9333ea', background: !refSqlMode ? '#9333ea' : 'white', color: !refSqlMode ? 'white' : '#9333ea', cursor: 'pointer' }}>📂 Archivo</button>
+                                    <button type="button" onClick={() => { setRefSqlMode(true); setMainFiles([]); }} style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.75rem', border: '2px solid #3b82f6', background: refSqlMode ? '#3b82f6' : 'white', color: refSqlMode ? 'white' : '#3b82f6', cursor: 'pointer' }}>⚡ SQL</button>
+                                </div>
+                                {!refSqlMode ? (
+                                    <div className="border-2 border-dashed border-purple-300 rounded-lg p-6 text-center bg-white hover:bg-purple-50 transition-colors relative cursor-pointer">
+                                        <input type="file" accept=".csv,.txt,.xlsx,.xls" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" onChange={handleMainFiles} />
+                                        <Icon name="file-search" size={24} className="mx-auto text-purple-500 mb-2" />
+                                        <p className="text-sm font-medium text-purple-800">{mainFiles.length > 0 ? <span className="font-bold">B. Archivo base listo: {mainFiles[0].name}</span> : 'B. Sube el archivo de donde se extraerán estos referidos'}</p>
+                                    </div>
+                                ) : (
+                                    <div className="flex flex-col gap-2">
+                                        <textarea style={{ width: '100%', minHeight: '80px', padding: '0.5rem', border: '2px solid #3b82f6', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.8rem', resize: 'vertical', boxSizing: 'border-box' }} value={refSqlQuery} onChange={e => setRefSqlQuery(e.target.value)} placeholder="SELECT RUT, NOMBRES... FROM tabla WHERE..." />
+                                        <button type="button" style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.8rem', background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', alignSelf: 'flex-start' }} onClick={async () => {
+                                            if (!refSqlQuery.trim()) return;
+                                            const r = await window.nexusAPI.executeSQL(refSqlQuery);
+                                            if (!r.success) { addToast('Error SQL: ' + r.error, 'error'); return; }
+                                            setRefSqlData(r.data);
+                                            addToast(`${r.data.length} registros cargados desde SQL.`, 'success');
+                                        }}>⚡ Ejecutar</button>
+                                        {refSqlData && <p className="text-xs text-emerald-600 font-bold">✓ {refSqlData.length} registros listos para cruce</p>}
+                                    </div>
+                                )}
                             </div>
                         </div>
                     )}
@@ -1426,10 +1516,19 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                                 </div>
                             ) : (
                                 <div className="flex flex-col gap-2">
-                                    <textarea style={{ width: '100%', minHeight: '80px', padding: '0.5rem', border: '2px solid #3b82f6', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.8rem', resize: 'vertical', boxSizing: 'border-box' }} value={exclusionSqlQuery} onChange={e => setExclusionSqlQuery(e.target.value)} placeholder="SELECT RUT FROM tabla WHERE..." />
+                                    <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-2 flex flex-col gap-1">
+                                        <label className="text-xs font-bold text-indigo-800">📋 Lista(s) vigente(s) SAE_WEB <span className="text-red-500">*</span></label>
+                                        <input type="text" value={exclusionListasSaeWeb} onChange={e => { setExclusionListasSaeWeb(e.target.value); setExclusionSqlData(null); const q = buildUnionAllQuery(e.target.value, '*', getPrimerDiaMesGlobal(), 'SAE_WEB'); setExclusionSqlQuery(q ? `-- Resultante SAE_WEB\n${q};` : '-- ⚠️ Ingresa la(s) lista(s) vigente(s) SAE_WEB para generar la query.'); }} placeholder="Ej: 1103, 1107" className="w-full border border-indigo-300 rounded p-1.5 text-sm font-mono outline-none focus:border-indigo-500 bg-white" />
+                                        <p className="text-[10px] text-indigo-600">Separadas por coma. La fecha se ajusta al primer día del mes en curso.</p>
+                                    </div>
+                                    <div className="bg-amber-50 border border-amber-200 rounded p-2 text-[10px] text-amber-800 font-bold">⚠️ Fecha calculada automáticamente al primer día del mes. Puedes editar la query si necesitas otra fecha.</div>
+                                    <textarea style={{ width: '100%', minHeight: '80px', padding: '0.5rem', border: '2px solid #3b82f6', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.75rem', resize: 'vertical', boxSizing: 'border-box' }} value={exclusionSqlQuery} onChange={e => setExclusionSqlQuery(e.target.value)} />
                                     <button type="button" style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.8rem', background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', alignSelf: 'flex-start' }} onClick={async () => {
-                                        if (!exclusionSqlQuery.trim()) return;
-                                        const r = await window.nexusAPI.executeSQL(exclusionSqlQuery);
+                                        if (!exclusionListasSaeWeb.trim()) { addToast('⚠️ Ingresa al menos una lista vigente SAE_WEB antes de ejecutar.', 'error'); return; }
+                                        const qFinalSaeWeb = buildUnionAllQuery(exclusionListasSaeWeb, '*', getPrimerDiaMesGlobal(), 'SAE_WEB');
+                                        if (!qFinalSaeWeb) return;
+                                        const querySaeWeb = `-- Resultante SAE_WEB\n${qFinalSaeWeb};`;
+                                        const r = await window.nexusAPI.executeSQL(querySaeWeb);
                                         if (!r.success) { addToast('Error SQL: ' + r.error, 'error'); return; }
                                         setExclusionSqlData(r.data);
                                         addToast(`${r.data.length} registros cargados desde SQL.`, 'success');
@@ -1551,7 +1650,9 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
         const [cruceFile, setCruceFile] = useState(null);
         const [usarCruce, setUsarCruce] = useState(true);
         const [cruceSqlMode, setCruceSqlMode] = useState(false);
-        const [cruceSqlQuery, setCruceSqlQuery] = useState('');
+        const [cruceSqlListasSaeWeb, setCruceSqlListasSaeWeb] = useState('');
+        const [cruceSqlListasSae, setCruceSqlListasSae] = useState('');
+        const [cruceSqlQuery, setCruceSqlQuery] = useState('-- ⚠️ Ingresa las listas vigentes de SAE_WEB y/o SAE para generar la query.');
         const [cruceSqlData, setCruceSqlData] = useState(null);
         const [formatoExportacion, setFormatoExportacion] = useState('xlsx');
         const [isProcessing, setIsProcessing] = useState(false);
@@ -1807,10 +1908,27 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                                 </div>
                             ) : (
                                 <div className="flex flex-col gap-2">
-                                    <textarea style={{ width: '100%', minHeight: '80px', padding: '0.5rem', border: '2px solid #3b82f6', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.8rem', resize: 'vertical', boxSizing: 'border-box' }} value={cruceSqlQuery} onChange={e => setCruceSqlQuery(e.target.value)} placeholder="SELECT RUT FROM tabla WHERE..." />
+                                    <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-2 flex flex-col gap-1">
+                                        <label className="text-xs font-bold text-indigo-800">📋 Lista(s) vigente(s) SAE_WEB</label>
+                                        <input type="text" value={cruceSqlListasSaeWeb} onChange={e => { setCruceSqlListasSaeWeb(e.target.value); setCruceSqlData(null); }} placeholder="Ej: 1103, 1107" className="w-full border border-indigo-300 rounded p-1.5 text-sm font-mono outline-none focus:border-indigo-500 bg-white" />
+                                        <p className="text-[10px] text-indigo-600">Dejar vacío si no aplica</p>
+                                    </div>
+                                    <div className="bg-violet-50 border border-violet-200 rounded-lg p-2 flex flex-col gap-1">
+                                        <label className="text-xs font-bold text-violet-800">📋 Lista(s) vigente(s) SAE</label>
+                                        <input type="text" value={cruceSqlListasSae} onChange={e => { setCruceSqlListasSae(e.target.value); setCruceSqlData(null); }} placeholder="Ej: 1105, 1108" className="w-full border border-violet-300 rounded p-1.5 text-sm font-mono outline-none focus:border-violet-500 bg-white" />
+                                        <p className="text-[10px] text-violet-600">Dejar vacío si no aplica</p>
+                                    </div>
+                                    <div className="bg-amber-50 border border-amber-200 rounded p-2 text-[10px] text-amber-800 font-bold">⚠️ La fecha se ajusta automáticamente al primer día del mes en curso. Puedes editar la query si necesitas otra fecha.</div>
+                                    <textarea style={{ width: '100%', minHeight: '120px', padding: '0.5rem', border: '2px solid #3b82f6', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.72rem', resize: 'vertical', boxSizing: 'border-box' }} value={(() => { const f = getPrimerDiaMesGlobal(); const parts = []; const qW = buildUnionAllQuery(cruceSqlListasSaeWeb, '*', f, 'SAE_WEB'); const qS = buildUnionAllQuery(cruceSqlListasSae, '*', f, 'SAE'); if (qW) parts.push(qW); if (qS) parts.push(qS); return parts.length > 0 ? parts.join('\n\nunion all\n\n') + ';' : cruceSqlQuery; })()} onChange={e => setCruceSqlQuery(e.target.value)} />
                                     <button type="button" style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.8rem', background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', alignSelf: 'flex-start' }} onClick={async () => {
-                                        if (!cruceSqlQuery.trim()) return;
-                                        const r = await window.nexusAPI.executeSQL(cruceSqlQuery);
+                                        if (!cruceSqlListasSaeWeb.trim() && !cruceSqlListasSae.trim()) { addToast('⚠️ Ingresa al menos una lista vigente (SAE_WEB o SAE) antes de ejecutar.', 'error'); return; }
+                                        const f3 = getPrimerDiaMesGlobal();
+                                        const parts3 = [];
+                                        const qW3 = buildUnionAllQuery(cruceSqlListasSaeWeb, '*', f3, 'SAE_WEB');
+                                        const qS3 = buildUnionAllQuery(cruceSqlListasSae, '*', f3, 'SAE');
+                                        if (qW3) parts3.push(qW3); if (qS3) parts3.push(qS3);
+                                        const queryFinal3 = parts3.join('\n\nunion all\n\n') + ';';
+                                        const r = await window.nexusAPI.executeSQL(queryFinal3);
                                         if (!r.success) { addToast('Error SQL: ' + r.error, 'error'); return; }
                                         setCruceSqlData(r.data);
                                         addToast(`${r.data.length} registros cargados desde SQL.`, 'success');
@@ -1899,7 +2017,8 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
         const [cruceFile, setCruceFile] = useState(null);
         const [usarCruce, setUsarCruce] = useState(true);
         const [cruceSqlMode, setCruceSqlMode] = useState(false);
-        const [cruceSqlQuery, setCruceSqlQuery] = useState('');
+        const [cruceSqlListasCC, setCruceSqlListasCC] = useState('');
+        const [cruceSqlQuery, setCruceSqlQuery] = useState('-- ⚠️ Ingresa la(s) lista(s) vigente(s) CC para generar la query.');
         const [cruceSqlData, setCruceSqlData] = useState(null);
         const [processReport, setProcessReport] = useState(null);
 
@@ -1914,6 +2033,9 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
         const [refListaFile, setRefListaFile] = useState(null);
         const [pendientesHojas, setPendientesHojas] = useState([]);
         const [sheetSelections, setSheetSelections] = useState({});
+        const [refSqlMode, setRefSqlMode] = useState(false);
+        const [refSqlQuery, setRefSqlQuery] = useState('');
+        const [refSqlData, setRefSqlData] = useState(null);
 
         const calculateDV = (rutStr) => {
             let num = String(rutStr).replace(/[^0-9]/g, '');
@@ -2102,7 +2224,8 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
         // ================= LÓGICA MODO REFERIDOS DESDE LISTA =================
         const handleProcessRefLista = async () => {
             if (!refInputRuts.trim()) { addToast('Pega al menos un RUT para buscar.', 'error'); return; }
-            if (!refListaFile) { addToast('Carga el archivo de la lista de origen.', 'error'); return; }
+            if (!refSqlMode && !refListaFile) { addToast('Carga el archivo de la lista de origen.', 'error'); return; }
+            if (refSqlMode && !refSqlData) { addToast('Ejecuta la consulta SQL para cargar la base.', 'error'); return; }
 
             setIsProcessing(true);
             try {
@@ -2113,7 +2236,13 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                 const targetRuts = new Set(refInputRuts.split(/[\n,; \t]+/).map(r => cleanRutLocal(r)).filter(r => r.length >= 6));
                 if (targetRuts.size === 0) throw new Error("No hay RUTs válidos.");
 
-                const baseData = await procesarArchivoExtraido(refListaFile);
+                let baseData = [];
+                if (refSqlMode && refSqlData) {
+                    baseData = refSqlData;
+                } else {
+                    baseData = await procesarArchivoExtraido(refListaFile);
+                }
+
                 const matched = baseData.filter(row => {
                     const rutKey = Object.keys(row).find(k => /^(vendor_lead_code|postal_code|rut|rut_cliente)$/i.test(k));
                     const r = rutKey ? cleanRutLocal(row[rutKey]) : '';
@@ -2303,15 +2432,35 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                     {['referido_sae_web', 'referido_sae', 'referido_rdr_web'].includes(modo) && (
                         <div className="flex flex-col gap-4 animate-fade-in">
                             <div className="border border-purple-200 rounded-lg p-4 bg-purple-50">
-                                <label className="block text-sm font-bold text-purple-800 mb-2">Pega los RUTs a buscar:</label>
+                                <label className="block text-sm font-bold text-purple-800 mb-2">A. Pega los RUTs a buscar y extraer:</label>
                                 <textarea className="w-full h-24 p-3 border border-purple-300 rounded focus:border-purple-500 outline-none text-sm font-mono resize-none bg-white" placeholder="Ej: 12345678" value={refInputRuts} onChange={(e) => setRefInputRuts(e.target.value)}></textarea>
                             </div>
-                            <div className="border-2 border-dashed border-purple-300 rounded-lg p-6 text-center bg-white hover:bg-purple-50 transition-colors cursor-pointer relative">
-                                <input type="file" accept=".csv,.txt,.xlsx,.xls" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" onChange={(e) => setRefListaFile(e.target.files[0])} />
-                                <Icon name="file-search" size={24} className="mx-auto text-purple-500 mb-2" />
-                                <p className="text-sm font-medium text-purple-800">
-                                    {refListaFile ? <span className="font-bold">Archivo base listo: {refListaFile.name}</span> : 'Sube el archivo de donde se extraerán estos referidos'}
-                                </p>
+                            <div className="flex flex-col gap-2">
+                                <div style={{ display: 'flex', gap: '6px' }}>
+                                    <button type="button" onClick={() => { setRefSqlMode(false); setRefSqlData(null); }} style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.75rem', border: '2px solid #9333ea', background: !refSqlMode ? '#9333ea' : 'white', color: !refSqlMode ? 'white' : '#9333ea', cursor: 'pointer' }}>📂 Archivo</button>
+                                    <button type="button" onClick={() => { setRefSqlMode(true); setRefListaFile(null); }} style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.75rem', border: '2px solid #3b82f6', background: refSqlMode ? '#3b82f6' : 'white', color: refSqlMode ? 'white' : '#3b82f6', cursor: 'pointer' }}>⚡ SQL</button>
+                                </div>
+                                {!refSqlMode ? (
+                                    <div className="border-2 border-dashed border-purple-300 rounded-lg p-6 text-center bg-white hover:bg-purple-50 transition-colors cursor-pointer relative">
+                                        <input type="file" accept=".csv,.txt,.xlsx,.xls" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" onChange={(e) => setRefListaFile(e.target.files[0])} />
+                                        <Icon name="file-search" size={24} className="mx-auto text-purple-500 mb-2" />
+                                        <p className="text-sm font-medium text-purple-800">
+                                            {refListaFile ? <span className="font-bold">B. Archivo base listo: {refListaFile.name}</span> : 'B. Sube el archivo de donde se extraerán estos referidos'}
+                                        </p>
+                                    </div>
+                                ) : (
+                                    <div className="flex flex-col gap-2">
+                                        <textarea style={{ width: '100%', minHeight: '80px', padding: '0.5rem', border: '2px solid #3b82f6', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.8rem', resize: 'vertical', boxSizing: 'border-box' }} value={refSqlQuery} onChange={e => setRefSqlQuery(e.target.value)} placeholder="SELECT RUT, NOMBRES... FROM tabla WHERE..." />
+                                        <button type="button" style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.8rem', background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', alignSelf: 'flex-start' }} onClick={async () => {
+                                            if (!refSqlQuery.trim()) return;
+                                            const r = await window.nexusAPI.executeSQL(refSqlQuery);
+                                            if (!r.success) { addToast('Error SQL: ' + r.error, 'error'); return; }
+                                            setRefSqlData(r.data);
+                                            addToast(`${r.data.length} registros cargados desde SQL.`, 'success');
+                                        }}>⚡ Ejecutar</button>
+                                        {refSqlData && <p className="text-xs text-emerald-600 font-bold">✓ {refSqlData.length} registros listos para cruce</p>}
+                                    </div>
+                                )}
                             </div>
                         </div>
                     )}
@@ -2402,10 +2551,19 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                                     </div>
                                 ) : (
                                     <div className="flex flex-col gap-2">
-                                        <textarea style={{ width: '100%', minHeight: '80px', padding: '0.5rem', border: '2px solid #3b82f6', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.8rem', resize: 'vertical', boxSizing: 'border-box' }} value={cruceSqlQuery} onChange={e => setCruceSqlQuery(e.target.value)} placeholder="SELECT RUT FROM tabla WHERE..." />
+                                        <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-2 flex flex-col gap-1">
+                                            <label className="text-xs font-bold text-indigo-800">📋 Lista(s) vigente(s) CC <span className="text-red-500">*</span></label>
+                                            <input type="text" value={cruceSqlListasCC} onChange={e => { setCruceSqlListasCC(e.target.value); setCruceSqlData(null); const q = buildUnionAllQuery(e.target.value, '*', getPrimerDiaMesGlobal(), 'CC'); setCruceSqlQuery(q ? `-- Resultante CC\n${q};` : '-- ⚠️ Ingresa la(s) lista(s) vigente(s) CC para generar la query.'); }} placeholder="Ej: 1106, 1109" className="w-full border border-indigo-300 rounded p-1.5 text-sm font-mono outline-none focus:border-indigo-500 bg-white" />
+                                            <p className="text-[10px] text-indigo-600">Separadas por coma. La fecha se ajusta al primer día del mes en curso.</p>
+                                        </div>
+                                        <div className="bg-amber-50 border border-amber-200 rounded p-2 text-[10px] text-amber-800 font-bold">⚠️ Fecha calculada automáticamente al primer día del mes. Puedes editar la query si necesitas otra fecha.</div>
+                                        <textarea style={{ width: '100%', minHeight: '80px', padding: '0.5rem', border: '2px solid #3b82f6', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.75rem', resize: 'vertical', boxSizing: 'border-box' }} value={cruceSqlQuery} onChange={e => setCruceSqlQuery(e.target.value)} />
                                         <button type="button" style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.8rem', background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', alignSelf: 'flex-start' }} onClick={async () => {
-                                            if (!cruceSqlQuery.trim()) return;
-                                            const r = await window.nexusAPI.executeSQL(cruceSqlQuery);
+                                            if (!cruceSqlListasCC.trim()) { addToast('⚠️ Ingresa al menos una lista vigente CC antes de ejecutar.', 'error'); return; }
+                                            const qFinalCC = buildUnionAllQuery(cruceSqlListasCC, '*', getPrimerDiaMesGlobal(), 'CC');
+                                            if (!qFinalCC) return;
+                                            const queryCC = `-- Resultante CC\n${qFinalCC};`;
+                                            const r = await window.nexusAPI.executeSQL(queryCC);
                                             if (!r.success) { addToast('Error SQL: ' + r.error, 'error'); return; }
                                             setCruceSqlData(r.data);
                                             addToast(`${r.data.length} registros cargados desde SQL.`, 'success');
@@ -2438,11 +2596,11 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                     </div>
 
                     <button
-                        className={`w-full md:w-auto px-8 py-3 rounded-lg font-bold text-white shadow-md transition-all flex items-center justify-center gap-2 ${isProcessing || (modo === 'masivo' && (baseFiles.length === 0 || (usarCruce && !cruceFile && !cruceSqlData)))
+                        className={`w-full md:w-auto px-8 py-3 rounded-lg font-bold text-white shadow-md transition-all flex items-center justify-center gap-2 ${isProcessing || (modo === 'masivo' && (baseFiles.length === 0 || (usarCruce && !cruceFile && !cruceSqlData))) || (['referido_sae_web', 'referido_sae', 'referido_rdr_web'].includes(modo) && (!refInputRuts.trim() || (!refSqlMode && !refListaFile) || (refSqlMode && !refSqlData)))
                             ? 'bg-gray-400 cursor-not-allowed opacity-70'
                             : 'bg-emerald-600 hover:bg-emerald-700 hover:scale-[1.02]'
                             }`}
-                        disabled={isProcessing || (modo === 'masivo' && (baseFiles.length === 0 || (usarCruce && !cruceFile && !cruceSqlData)))}
+                        disabled={isProcessing || (modo === 'masivo' && (baseFiles.length === 0 || (usarCruce && !cruceFile && !cruceSqlData))) || (['referido_sae_web', 'referido_sae', 'referido_rdr_web'].includes(modo) && (!refInputRuts.trim() || (!refSqlMode && !refListaFile) || (refSqlMode && !refSqlData)))}
                         onClick={modo === 'masivo' ? handleProcessMasivo : modo === 'manual' ? handleProcessReferidos : handleProcessRefLista}
                     >
                         {isProcessing ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : <Icon name={modo === 'masivo' ? "play-circle" : "save"} size={20} />}
@@ -2516,6 +2674,9 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
     const PanelSernac = ({ isOpen, onToggle, globalTrigger, Icon }) => {
         const [clientFiles, setClientFiles] = useState([]);
         const [dncFiles, setDncFiles] = useState([]);
+        const [dncSqlMode, setDncSqlMode] = useState(false);
+        const [dncSqlQuery, setDncSqlQuery] = useState('');
+        const [dncSqlData, setDncSqlData] = useState(null);
         const [mode, setMode] = useState('dncl');
         const [isProcessing, setIsProcessing] = useState(false);
         const [results, setResults] = useState(null);
@@ -2524,15 +2685,19 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
         const [sheetSelections, setSheetSelections] = useState({});
 
         useEffect(() => {
-            if (globalTrigger > 0 && clientFiles.length > 0 && dncFiles.length > 0 && !isProcessing) handleProcess();
+            if (globalTrigger > 0 && clientFiles.length > 0 && (!dncSqlMode ? dncFiles.length > 0 : dncSqlData) && !isProcessing) handleProcess();
         }, [globalTrigger]);
 
         const handleProcess = async () => {
             setPanelMessage({ type: '', text: '' });
             setResults(null);
 
-            if (clientFiles.length === 0 || dncFiles.length === 0) {
+            if (clientFiles.length === 0 || (!dncSqlMode && dncFiles.length === 0)) {
                 setPanelMessage({ type: 'error', text: 'Faltan archivos. Debes cargar al menos un archivo del Cliente y uno de la Base.' });
+                return;
+            }
+            if (dncSqlMode && !dncSqlData) {
+                setPanelMessage({ type: 'error', text: 'Debes ejecutar la consulta SQL para la Base primero.' });
                 return;
             }
             setIsProcessing(true);
@@ -2593,8 +2758,9 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                     let dnclPhones = new Set();
                     let dncColDetected = false;
 
-                    for (let f of dncFiles) {
-                        const dncData = await t5_procesarArchivo(f, sheetSelections[f.name]);
+                    let sources = dncSqlMode && dncSqlData ? [dncSqlData] : dncFiles;
+                    for (let f of sources) {
+                        const dncData = dncSqlMode ? f : await t5_procesarArchivo(f, sheetSelections[f.name]);
                         dncData.forEach(row => {
                             const phoneKey = findPhoneKey(row);
                             if (phoneKey) {
@@ -2619,8 +2785,9 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                     setPanelMessage({ type: 'success', text: `Cruce exitoso. Se procesaron ${clientPhones.size} teléfonos del cliente.` });
                 } else {
                     let matchData = [];
-                    for (let f of dncFiles) {
-                        const baseData = await t5_procesarArchivo(f, sheetSelections[f.name]);
+                    let sources = dncSqlMode && dncSqlData ? [dncSqlData] : dncFiles;
+                    for (let f of sources) {
+                        const baseData = dncSqlMode ? f : await t5_procesarArchivo(f, sheetSelections[f.name]);
                         baseData.forEach(row => {
                             const idKey = Object.keys(row).find(k => /rut|indice|row_id|ddas_nrt_ppal/i.test(k)) || "ID_NO_ENCONTRADO";
                             const idVal = row[idKey] || "";
@@ -2679,11 +2846,32 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                             <h4 className="font-bold text-red-800 text-sm">Archivos Cliente (Sernac)</h4>
                             <p className="text-xs text-red-600 mt-1">{clientFiles.length > 0 ? `${clientFiles.length} archivos cargados` : 'Arrastrar archivos aquí'}</p>
                         </div>
-                        <div className="border-2 border-dashed border-slate-300 bg-slate-50 p-6 rounded-lg text-center relative flex flex-col justify-center">
-                            <input type="file" multiple accept=".csv,.txt,.xlsx,.xls" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" onChange={(e) => setDncFiles(Array.from(e.target.files))} />
-                            <Icon name="database" size={24} className="mx-auto text-slate-400 mb-2" />
-                            <h4 className="font-bold text-slate-700 text-sm">{mode === 'dncl' ? 'Lista Actual DNCL' : 'Bases Resultantes'}</h4>
-                            <p className="text-xs text-slate-500 mt-1">{dncFiles.length > 0 ? `${dncFiles.length} archivos cargados` : 'Arrastrar archivos aquí'}</p>
+                        <div className="flex flex-col gap-2">
+                            <div style={{ display: 'flex', gap: '6px' }}>
+                                <button type="button" onClick={(e) => { e.stopPropagation(); setDncSqlMode(false); setDncSqlData(null); }} style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.75rem', border: '2px solid #64748b', background: !dncSqlMode ? '#64748b' : 'white', color: !dncSqlMode ? 'white' : '#64748b', cursor: 'pointer' }}>📂 Archivos</button>
+                                <button type="button" onClick={(e) => { e.stopPropagation(); setDncSqlMode(true); setDncFiles([]); }} style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.75rem', border: '2px solid #3b82f6', background: dncSqlMode ? '#3b82f6' : 'white', color: dncSqlMode ? 'white' : '#3b82f6', cursor: 'pointer' }}>⚡ SQL</button>
+                            </div>
+                            {!dncSqlMode ? (
+                                <div className="h-full border-2 border-dashed border-slate-300 bg-slate-50 p-6 rounded-lg text-center relative flex flex-col justify-center">
+                                    <input type="file" multiple accept=".csv,.txt,.xlsx,.xls" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" onChange={(e) => setDncFiles(Array.from(e.target.files))} />
+                                    <Icon name="database" size={24} className="mx-auto text-slate-400 mb-2" />
+                                    <h4 className="font-bold text-slate-700 text-sm">{mode === 'dncl' ? 'Lista Actual DNCL' : 'Bases Resultantes'}</h4>
+                                    <p className="text-xs text-slate-500 mt-1">{dncFiles.length > 0 ? `${dncFiles.length} archivos cargados` : 'Arrastrar archivos aquí'}</p>
+                                </div>
+                            ) : (
+                                <div className="flex flex-col gap-2 h-full justify-center">
+                                    <div className="bg-amber-50 border-2 border-amber-400 rounded-lg p-4 flex items-start gap-3">
+                                        <span className="text-amber-500 text-xl flex-shrink-0">⚠️</span>
+                                        <p className="text-sm font-bold text-amber-800">
+                                            DNCL requiere un proceso manual, seleccione la opción Archivos y cargue la lista DNC desde Vicidial.
+                                        </p>
+                                    </div>
+                                    <div className="bg-blue-50 border border-blue-200 rounded p-3 text-xs text-blue-800 font-medium">
+                                        Agrega los casos nuevos en la zona correspondiente en Vicidial.<br />
+                                        <strong>RUTA:</strong> Listas / Agregar Números DNC / Sección "Números de Teléfono"
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </div>
 
@@ -2694,7 +2882,7 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                         </div>
                     )}
 
-                    <button type="button" onClick={(e) => { e.preventDefault(); handleProcess(); }} disabled={isProcessing || clientFiles.length === 0 || dncFiles.length === 0} className={`w-full py-3 rounded-lg font-bold text-white flex justify-center items-center gap-2 ${isProcessing || clientFiles.length === 0 || dncFiles.length === 0 ? 'bg-gray-400 cursor-not-allowed' : 'bg-slate-800 hover:bg-slate-900'}`}>
+                    <button type="button" onClick={(e) => { e.preventDefault(); handleProcess(); }} disabled={isProcessing || clientFiles.length === 0 || (!dncSqlMode && dncFiles.length === 0) || (dncSqlMode && !dncSqlData)} className={`w-full py-3 rounded-lg font-bold text-white flex justify-center items-center gap-2 ${isProcessing || clientFiles.length === 0 || (!dncSqlMode && dncFiles.length === 0) || (dncSqlMode && !dncSqlData) ? 'bg-gray-400 cursor-not-allowed' : 'bg-slate-800 hover:bg-slate-900'}`}>
                         {isProcessing ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : <Icon name="play" size={18} />}
                         Procesar Cruce Sernac
                     </button>
@@ -2740,17 +2928,55 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
 
     // --- SUB-COMPONENTE 2: ALTAS/BAJAS (AHORA INDEPENDIENTE Y PERSISTENTE) ---
     const PanelAltasBajas = ({ title, type, isOpen, onToggle, globalTrigger, Icon }) => {
+
+        // Helper: primer día del mes en curso en formato YYYY-MM-01
+        const getPrimerDiaMes = () => {
+            const now = new Date();
+            return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+        };
+
+        // Helper: construye UNION ALL donde cada lista = su propio JOIN custom_XXXX
+        // selectFields: campos del SELECT, fecha: primer día del mes
+        const buildUnionAll = (listas, selectFields, fecha, label) => {
+            const nums = listas.split(',').map(s => s.trim()).filter(Boolean);
+            if (nums.length === 0) return null;
+            return nums.map(n =>
+                `-- Lista ${n}${label ? ' (' + label + ')' : ''}\nSELECT ${selectFields}\nFROM vicidial_list vl JOIN custom_${n} c ON vl.lead_id = c.lead_id\nWHERE cast(entry_date as DATE) >= '${fecha}'`
+            ).join('\n\nunion all\n\n');
+        };
+
+        // Query placeholder inicial según tipo
+        const getQueryPredefinida = () => {
+            switch (type) {
+                case 'RDR': return `-- Resultante mínima para RDR\n-- ⚠️ Ingresa la(s) lista(s) vigente(s) RDR para generar la query.`;
+                case 'SAE': return `-- ⚠️ Ingresa las listas vigentes de SAE_WEB y/o SAE para generar la query.`;
+                case 'CC': return `-- Resultante mínima para CC\n-- ⚠️ Ingresa la(s) lista(s) vigente(s) CC para generar la query.`;
+                default: return '';
+            }
+        };
+
         const [clientFiles, setClientFiles] = useState([]);
         const [crmFiles, setCrmFiles] = useState([]);
+        const [crmSqlMode, setCrmSqlMode] = useState(false);
+        const [crmSqlQuery, setCrmSqlQuery] = useState(() => getQueryPredefinida());
+        const [crmSqlData, setCrmSqlData] = useState(null);
         const [crmType, setCrmType] = useState('vicidial');
+
+        // Estados para listas vigentes (generan la query final con UNION ALL si aplica)
+        const [listasRDR, setListasRDR] = useState('');
+        const [listasSaeWeb, setListasSaeWeb] = useState('');
+        const [listasSae, setListasSae] = useState('');
+        const [listasCC, setListasCC] = useState('');
         const [isProcessing, setIsProcessing] = useState(false);
         const [results, setResults] = useState(null);
         const [panelMessage, setPanelMessage] = useState({ type: '', text: '' });
         const [pendientesHojas, setPendientesHojas] = useState([]);
         const [sheetSelections, setSheetSelections] = useState({});
+        const [modoEjecucion, setModoEjecucion] = useState('manual');
+        const [ejecutandoSQL, setEjecutandoSQL] = useState(false);
 
         useEffect(() => {
-            if (globalTrigger > 0 && clientFiles.length > 0 && crmFiles.length > 0 && !isProcessing) handleProcess();
+            if (globalTrigger > 0 && clientFiles.length > 0 && (!crmSqlMode ? crmFiles.length > 0 : crmSqlData) && !isProcessing) handleProcess();
         }, [globalTrigger]);
 
         const getTableConfig = () => {
@@ -2762,12 +2988,40 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
             }
         };
 
+        // Construye la query final: UNION ALL por cada lista, cada una con su propio JOIN custom_XXXX
+        const buildQueryConListas = () => {
+            const fecha = getPrimerDiaMes();
+
+            if (type === 'RDR') {
+                const q = buildUnionAll(listasRDR, 'vl.vendor_lead_code,vl.lead_id,status,list_id', fecha, 'RDR');
+                return q ? `-- Resultante mínima para RDR\n${q};` : null;
+            }
+            if (type === 'SAE') {
+                const parts = [];
+                const qWeb = buildUnionAll(listasSaeWeb, 'vl.vendor_lead_code,vl.lead_id,status,list_id', fecha, 'SAE_WEB');
+                const qSae = buildUnionAll(listasSae, 'vl.vendor_lead_code,vl.lead_id,status,list_id', fecha, 'SAE');
+                if (qWeb) parts.push(qWeb);
+                if (qSae) parts.push(qSae);
+                if (parts.length === 0) return null;
+                return parts.join('\n\nunion all\n\n') + ';';
+            }
+            if (type === 'CC') {
+                const q = buildUnionAll(listasCC, 'vl.postal_code,vl.lead_id,status,list_id,user', fecha, 'CC');
+                return q ? `-- Resultante mínima para CC\n${q};` : null;
+            }
+            return crmSqlQuery;
+        };
+
         const handleProcess = async () => {
             setPanelMessage({ type: '', text: '' });
             setResults(null);
 
-            if (clientFiles.length === 0 || crmFiles.length === 0) {
+            if (clientFiles.length === 0 || (!crmSqlMode && crmFiles.length === 0)) {
                 setPanelMessage({ type: 'error', text: 'Faltan archivos para procesar. Debes cargar el archivo del cliente y la base vigente.' });
+                return;
+            }
+            if (crmSqlMode && !crmSqlData) {
+                setPanelMessage({ type: 'error', text: 'Debes ejecutar la consulta SQL para la Base Vigente primero.' });
                 return;
             }
 
@@ -2835,8 +3089,9 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
 
                 if (crmType === 'vicidial') {
                     const listIdMap = {};
-                    for (let f of crmFiles) {
-                        const crmData = await t5_procesarArchivo(f, sheetSelections[f.name]);
+                    let sources = crmSqlMode && crmSqlData ? [crmSqlData] : crmFiles;
+                    for (let f of sources) {
+                        const crmData = crmSqlMode ? f : await t5_procesarArchivo(f, sheetSelections[f.name]);
                         crmData.forEach(row => {
                             let matchVal = "";
                             for (let key of config.viciMatch) {
@@ -2880,8 +3135,9 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
 
                 } else { // Vocalcom
                     const indices = [];
-                    for (let f of crmFiles) {
-                        const crmData = await t5_procesarArchivo(f, sheetSelections[f.name]);
+                    let sources = crmSqlMode && crmSqlData ? [crmSqlData] : crmFiles;
+                    for (let f of sources) {
+                        const crmData = crmSqlMode ? f : await t5_procesarArchivo(f, sheetSelections[f.name]);
                         crmData.forEach(row => {
                             const rKey = Object.keys(row).find(k => /rut/i.test(k));
                             const iKey = Object.keys(row).find(k => /indice/i.test(k));
@@ -2928,6 +3184,27 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
             finally { setIsProcessing(false); }
         };
 
+        const ejecutarSQL = async () => {
+            if (!results || !results.query) return;
+            if (!window.nexusAPI) { setPanelMessage({ type: 'error', text: 'Sin conexion SQL activa.' }); return; }
+            setEjecutandoSQL(true);
+            setPanelMessage({ type: '', text: '' });
+            try {
+                const sentencias = results.query.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('--'));
+                let ok = 0, err = 0, errMsg = '';
+                for (const sql of sentencias) {
+                    const r = await window.nexusAPI.executeSQL(sql);
+                    if (r.success) ok++;
+                    else { err++; errMsg = r.error || errMsg; }
+                }
+                if (err === 0) setPanelMessage({ type: 'success', text: `Ejecutadas ${ok} sentencias en ${crmType === 'vicidial' ? 'MySQL/Vicidial' : 'SQL Server/Vocalcom'}.` });
+                else setPanelMessage({ type: 'warning', text: `${ok} OK / ${err} con error. Ultimo: ${errMsg}` });
+            } catch (e) {
+                setPanelMessage({ type: 'error', text: 'Error al ejecutar: ' + e.message });
+            }
+            setEjecutandoSQL(false);
+        };
+
         const bgHeader = type === 'RDR' ? 'bg-indigo-800' : type === 'SAE' ? 'bg-sky-800' : 'bg-emerald-800';
         return (
             <div className="border border-gray-200 rounded-lg bg-white overflow-hidden mb-4 shadow-sm">
@@ -2959,18 +3236,72 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                                 Campos requeridos: RUT y ESTADO
                             </div>
                         </div>
-                        <div className="border-2 border-dashed border-blue-300 bg-blue-50 p-6 rounded-lg text-center relative flex flex-col justify-center">
-                            <input type="file" multiple accept=".csv,.txt,.xlsx,.xls" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" onChange={(e) => setCrmFiles(Array.from(e.target.files))} />
-                            <Icon name="server" size={24} className="mx-auto text-blue-500 mb-2" />
-                            <h4 className="font-bold text-blue-800 text-sm">Base Vigente ({crmType === 'vicidial' ? 'Lista Vigente' : 'Resultante'})</h4>
-                            <p className="text-xs text-blue-600 mt-1">{crmFiles.length > 0 ? `${crmFiles.length} archivos cargados` : 'Arrastrar archivos aquí'}</p>
-                            <div className="mt-3 inline-block bg-blue-100 text-blue-800 text-[11px] font-bold px-2 py-1 rounded border border-blue-200">
-                                {crmType === 'vocalcom'
-                                    ? 'Campos req: RUT e INDICE'
-                                    : type === 'CC'
-                                        ? 'Campos req: postal_code (o RUT), lead_id y list_id'
-                                        : 'Campos req: vendor_lead_code (o RUT), lead_id y list_id'}
+                        <div className="flex flex-col gap-2">
+                            <div style={{ display: 'flex', gap: '6px' }}>
+                                <button type="button" onClick={(e) => { e.stopPropagation(); setCrmSqlMode(false); setCrmSqlData(null); }} style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.75rem', border: '2px solid #3b82f6', background: !crmSqlMode ? '#3b82f6' : 'white', color: !crmSqlMode ? 'white' : '#3b82f6', cursor: 'pointer' }}>📂 Archivos</button>
+                                <button type="button" onClick={(e) => { e.stopPropagation(); setCrmSqlMode(true); setCrmFiles([]); }} style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.75rem', border: '2px solid #8b5cf6', background: crmSqlMode ? '#8b5cf6' : 'white', color: crmSqlMode ? 'white' : '#8b5cf6', cursor: 'pointer' }}>⚡ SQL</button>
                             </div>
+                            {!crmSqlMode ? (
+                                <div className="h-full border-2 border-dashed border-blue-300 bg-blue-50 p-6 rounded-lg text-center relative flex flex-col justify-center">
+                                    <input type="file" multiple accept=".csv,.txt,.xlsx,.xls" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" onChange={(e) => setCrmFiles(Array.from(e.target.files))} />
+                                    <Icon name="server" size={24} className="mx-auto text-blue-500 mb-2" />
+                                    <h4 className="font-bold text-blue-800 text-sm">Base Vigente ({crmType === 'vicidial' ? 'Lista Vigente' : 'Resultante'})</h4>
+                                    <p className="text-xs text-blue-600 mt-1">{crmFiles.length > 0 ? `${crmFiles.length} archivos cargados` : 'Arrastrar archivos aquí'}</p>
+                                    <div className="mt-3 inline-block bg-blue-100 text-blue-800 text-[11px] font-bold px-2 py-1 rounded border border-blue-200">
+                                        {crmType === 'vocalcom' ? 'Campos req: RUT e INDICE' : type === 'CC' ? 'Campos req: postal_code (o RUT), lead_id y list_id' : 'Campos req: vendor_lead_code (o RUT), lead_id y list_id'}
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="flex flex-col gap-2 h-full justify-center">
+                                    {/* INPUTS DE LISTAS VIGENTES según tipo */}
+                                    {type === 'RDR' && (
+                                        <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-3 flex flex-col gap-1">
+                                            <label className="text-xs font-bold text-indigo-800">📋 Lista(s) vigente(s) RDR <span className="text-red-500">*</span></label>
+                                            <input type="text" value={listasRDR} onChange={e => { setListasRDR(e.target.value); setCrmSqlData(null); }} placeholder="Ej: 1104, 1105, 1106" onClick={e => e.stopPropagation()} className="w-full border border-indigo-300 rounded p-1.5 text-sm font-mono outline-none focus:border-indigo-500 bg-white" />
+                                            <p className="text-[10px] text-indigo-600">Ingresa una o varias listas separadas por coma</p>
+                                        </div>
+                                    )}
+                                    {type === 'SAE' && (
+                                        <div className="flex flex-col gap-2">
+                                            <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-3 flex flex-col gap-1">
+                                                <label className="text-xs font-bold text-indigo-800">📋 Lista(s) vigente(s) SAE_WEB</label>
+                                                <input type="text" value={listasSaeWeb} onChange={e => { setListasSaeWeb(e.target.value); setCrmSqlData(null); }} placeholder="Ej: 1103, 1107" onClick={e => e.stopPropagation()} className="w-full border border-indigo-300 rounded p-1.5 text-sm font-mono outline-none focus:border-indigo-500 bg-white" />
+                                                <p className="text-[10px] text-indigo-600">Dejar vacío si no aplica</p>
+                                            </div>
+                                            <div className="bg-violet-50 border border-violet-200 rounded-lg p-3 flex flex-col gap-1">
+                                                <label className="text-xs font-bold text-violet-800">📋 Lista(s) vigente(s) SAE</label>
+                                                <input type="text" value={listasSae} onChange={e => { setListasSae(e.target.value); setCrmSqlData(null); }} placeholder="Ej: 1105, 1108" onClick={e => e.stopPropagation()} className="w-full border border-violet-300 rounded p-1.5 text-sm font-mono outline-none focus:border-violet-500 bg-white" />
+                                                <p className="text-[10px] text-violet-600">Dejar vacío si no aplica</p>
+                                            </div>
+                                        </div>
+                                    )}
+                                    {type === 'CC' && (
+                                        <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-3 flex flex-col gap-1">
+                                            <label className="text-xs font-bold text-indigo-800">📋 Lista(s) vigente(s) CC <span className="text-red-500">*</span></label>
+                                            <input type="text" value={listasCC} onChange={e => { setListasCC(e.target.value); setCrmSqlData(null); }} placeholder="Ej: 1106, 1109" onClick={e => e.stopPropagation()} className="w-full border border-indigo-300 rounded p-1.5 text-sm font-mono outline-none focus:border-indigo-500 bg-white" />
+                                            <p className="text-[10px] text-indigo-600">Ingresa una o varias listas separadas por coma</p>
+                                        </div>
+                                    )}
+                                    {/* Preview de la query que se ejecutará */}
+                                    <div className="bg-amber-50 border border-amber-300 rounded p-2 text-[10px] text-amber-800 font-bold">
+                                        ⚠️ La fecha de corte se calcula automáticamente al primer día del mes en curso. Puedes editar la query si necesitas otra fecha.
+                                    </div>
+                                    <textarea style={{ width: '100%', minHeight: '100px', padding: '0.5rem', border: '2px solid #8b5cf6', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.75rem', resize: 'vertical', boxSizing: 'border-box' }} value={(() => { const q = buildQueryConListas(); return q || crmSqlQuery; })()} onChange={e => setCrmSqlQuery(e.target.value)} onClick={e => e.stopPropagation()} />
+                                    <button type="button" style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.8rem', background: '#8b5cf6', color: 'white', border: 'none', cursor: 'pointer', alignSelf: 'flex-start' }} onClick={async (e) => {
+                                        e.stopPropagation();
+                                        if (type === 'RDR' && !listasRDR.trim()) { setPanelMessage({ type: 'error', text: '⚠️ Debes ingresar al menos una lista vigente para RDR antes de ejecutar.' }); return; }
+                                        if (type === 'SAE' && !listasSaeWeb.trim() && !listasSae.trim()) { setPanelMessage({ type: 'error', text: '⚠️ Debes ingresar al menos una lista vigente (SAE_WEB o SAE) antes de ejecutar.' }); return; }
+                                        if (type === 'CC' && !listasCC.trim()) { setPanelMessage({ type: 'error', text: '⚠️ Debes ingresar al menos una lista vigente para CC antes de ejecutar.' }); return; }
+                                        const queryFinal = buildQueryConListas();
+                                        if (!queryFinal) { setPanelMessage({ type: 'error', text: 'No se pudo construir la query. Verifica las listas ingresadas.' }); return; }
+                                        const r = await window.nexusAPI.executeSQL(queryFinal);
+                                        if (!r.success) { setPanelMessage({ type: 'error', text: 'Error SQL: ' + r.error }); return; }
+                                        setCrmSqlData(r.data);
+                                        setPanelMessage({ type: 'success', text: `${r.data.length} registros cargados desde SQL.` });
+                                    }}>⚡ Ejecutar</button>
+                                    {crmSqlData && <p className="text-xs text-emerald-600 font-bold">✓ {crmSqlData.length} registros listos</p>}
+                                </div>
+                            )}
                         </div>
                     </div>
 
@@ -2981,7 +3312,7 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                         </div>
                     )}
 
-                    <button type="button" onClick={(e) => { e.preventDefault(); handleProcess(); }} disabled={isProcessing || clientFiles.length === 0 || crmFiles.length === 0} className={`w-full py-3 rounded-lg font-bold text-white flex justify-center items-center gap-2 ${isProcessing || clientFiles.length === 0 || crmFiles.length === 0 ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}>
+                    <button type="button" onClick={(e) => { e.preventDefault(); handleProcess(); }} disabled={isProcessing || clientFiles.length === 0 || (!crmSqlMode && crmFiles.length === 0) || (crmSqlMode && !crmSqlData)} className={`w-full py-3 rounded-lg font-bold text-white flex justify-center items-center gap-2 ${isProcessing || clientFiles.length === 0 || (!crmSqlMode && crmFiles.length === 0) || (crmSqlMode && !crmSqlData) ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}>
                         {isProcessing ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : <Icon name="code" size={18} />}
                         Generar Querys de Actualización
                     </button>
@@ -2998,6 +3329,20 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
 
                             <div className="bg-yellow-50 border-l-4 border-yellow-400 p-3 mb-3 text-xs text-yellow-800 font-medium">
                                 <strong>AVISO:</strong> Las indicaciones de ejecución fueron incluidas en el encabezado del código SQL generado.
+                            </div>
+                            <div className="flex flex-wrap items-center gap-3 mb-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+                                <span className="text-xs font-bold text-gray-600">Modo de aplicacion:</span>
+                                <label className={`flex items-center gap-1.5 text-xs font-bold cursor-pointer px-2 py-1 rounded border-2 transition-colors ${modoEjecucion === 'manual' ? 'border-slate-500 bg-slate-100 text-slate-800' : 'border-gray-200 bg-white text-gray-500'}`}>
+                                    <input type="radio" name={`modo_${type}`} value="manual" checked={modoEjecucion === 'manual'} onChange={() => setModoEjecucion('manual')} /> Manual (copiar)
+                                </label>
+                                <label className={`flex items-center gap-1.5 text-xs font-bold cursor-pointer px-2 py-1 rounded border-2 transition-colors ${modoEjecucion === 'automatico' ? 'border-green-500 bg-green-50 text-green-800' : 'border-gray-200 bg-white text-gray-500'}`}>
+                                    <input type="radio" name={`modo_${type}`} value="automatico" checked={modoEjecucion === 'automatico'} onChange={() => setModoEjecucion('automatico')} /> Ejecutar directo
+                                </label>
+                                {modoEjecucion === 'automatico' && (
+                                    <button type="button" onClick={ejecutarSQL} disabled={ejecutandoSQL} className="ml-auto bg-green-700 hover:bg-green-800 disabled:bg-gray-400 text-white font-bold text-xs px-4 py-1.5 rounded flex items-center gap-1.5 transition-colors shadow-sm">
+                                        {ejecutandoSQL ? <><div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Ejecutando...</> : <><Icon name="zap" size={13} /> Ejecutar en {crmType === 'vicidial' ? 'MySQL' : 'SQL Server'}</>}
+                                    </button>
+                                )}
                             </div>
 
                             {results.matches <= 10000 ? (
@@ -3101,7 +3446,8 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
         const [vigenteFiles, setVigenteFiles] = useState([]);
         const [useVigente, setUseVigente] = useState(true);
         const [vigenteSqlMode, setVigenteSqlMode] = useState(false);
-        const [vigenteSqlQuery, setVigenteSqlQuery] = useState('');
+        const [vigenteSqlListas, setVigenteSqlListas] = useState('');
+        const [vigenteSqlQuery, setVigenteSqlQuery] = useState('-- ⚠️ Ingresa la(s) lista(s) vigente(s) para generar la query.');
         const [vigenteSqlData, setVigenteSqlData] = useState(null);
         const [maxRutCount, setMaxRutCount] = useState(10);
         const [baseDate, setBaseDate] = useState(new Date().toISOString().split('T')[0]);
@@ -3512,10 +3858,19 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                                         </div>
                                     ) : (
                                         <div className="flex flex-col gap-1">
-                                            <textarea style={{ width: '100%', minHeight: '70px', padding: '0.5rem', border: '2px solid #3b82f6', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.75rem', resize: 'vertical', boxSizing: 'border-box' }} value={vigenteSqlQuery} onChange={e => setVigenteSqlQuery(e.target.value)} placeholder="SELECT RUT FROM tabla WHERE..." />
+                                            <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-2 flex flex-col gap-1">
+                                                <label className="text-xs font-bold text-indigo-800">📋 Lista(s) vigente(s) <span className="text-red-500">*</span></label>
+                                                <input type="text" value={vigenteSqlListas} onChange={e => { setVigenteSqlListas(e.target.value); setVigenteSqlData(null); const q = buildUnionAllQuery(e.target.value, 'vl.postal_code,vl.lead_id,status,list_id,user', getPrimerDiaMesGlobal(), 'Consumer'); setVigenteSqlQuery(q ? `-- Resultante Santander Consumer\n${q};` : '-- ⚠️ Ingresa la(s) lista(s) vigente(s) para generar la query.'); }} placeholder="Ej: 1106, 1109" className="w-full border border-indigo-300 rounded p-1.5 text-xs font-mono outline-none focus:border-indigo-500 bg-white" />
+                                                <p className="text-[10px] text-indigo-600">Separadas por coma. Fecha = primer día del mes en curso.</p>
+                                            </div>
+                                            <div className="bg-amber-50 border border-amber-200 rounded p-1.5 text-[10px] text-amber-800 font-bold">⚠️ Fecha al primer día del mes. Puedes editar la query si necesitas otra.</div>
+                                            <textarea style={{ width: '100%', minHeight: '70px', padding: '0.5rem', border: '2px solid #3b82f6', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.72rem', resize: 'vertical', boxSizing: 'border-box' }} value={vigenteSqlQuery} onChange={e => setVigenteSqlQuery(e.target.value)} />
                                             <button type="button" style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.75rem', background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer' }} onClick={async () => {
-                                                if (!vigenteSqlQuery.trim()) return;
-                                                const r = await window.nexusAPI.executeSQL(vigenteSqlQuery);
+                                                if (!vigenteSqlListas.trim()) { setPanelMessage({ type: 'error', text: '⚠️ Ingresa al menos una lista vigente antes de ejecutar.' }); return; }
+                                                const qFinalSC = buildUnionAllQuery(vigenteSqlListas, 'vl.postal_code,vl.lead_id,status,list_id,user', getPrimerDiaMesGlobal(), 'Consumer');
+                                                if (!qFinalSC) return;
+                                                const querySC = `-- Resultante Santander Consumer\n${qFinalSC};`;
+                                                const r = await window.nexusAPI.executeSQL(querySC);
                                                 if (!r.success) { setPanelMessage({ type: 'error', text: 'Error SQL: ' + r.error }); return; }
                                                 setVigenteSqlData(r.data);
                                                 setPanelMessage({ type: 'success', text: `${r.data.length} registros cargados desde SQL.` });
@@ -3665,7 +4020,8 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
         const [solicitudFiles, setSolicitudFiles] = useState([]);
         const [cruceFiles, setCruceFiles] = useState([]);
         const [cruceSqlMode, setCruceSqlMode] = useState(false);
-        const [cruceSqlQuery, setCruceSqlQuery] = useState('');
+        const [cruceSqlListasEst, setCruceSqlListasEst] = useState('');
+        const [cruceSqlQuery, setCruceSqlQuery] = useState('-- ⚠️ Ingresa la(s) lista(s) vigente(s) para generar la query.');
         const [cruceSqlData, setCruceSqlData] = useState(null);
         const [marcaValue, setMarcaValue] = useState('');
 
@@ -3680,6 +4036,8 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
 
         const [statusFilters, setStatusFilters] = useState({});
         const [showFilters, setShowFilters] = useState(true);
+        const [modoEjecucion, setModoEjecucion] = useState('manual');
+        const [ejecutandoSQL, setEjecutandoSQL] = useState(false);
 
         useEffect(() => {
             if (solicitudFiles.length > 0 && (cruceFiles.length > 0 || cruceSqlData)) {
@@ -3766,26 +4124,34 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
 
                 cruceData.forEach(row => {
                     const rut = extractKey(row);
+                    if (!rut || !targetRutsMap.has(rut)) return;
+
+                    // Si viene de SQL puede traer vendor_lead_code/rut y status directamente
+                    // Si viene de archivo Vicidial trae lead_id, list_id, status
                     const leadKey = Object.keys(row).find(k => k.toLowerCase() === 'lead_id');
                     const listKey = Object.keys(row).find(k => k.toLowerCase() === 'list_id');
                     const statusKey = Object.keys(row).find(k => k.toLowerCase() === 'status');
 
-                    if (rut && targetRutsMap.has(rut) && leadKey && listKey && row[leadKey] && row[listKey]) {
-                        const sVal = statusKey && row[statusKey] ? String(row[statusKey]).trim() : '';
+                    // Para SQL: usamos lead_id=0 y list_id=0 como placeholder si no existen
+                    const leadVal = leadKey ? row[leadKey] : '0';
+                    const listVal = listKey ? row[listKey] : '0';
+                    const sVal = statusKey && row[statusKey] ? String(row[statusKey]).trim() : '';
 
-                        // Rescatamos TODAS las columnas originales de la solicitud + Data de Vicidial oculta
-                        targetRutsMap.get(rut).forEach(solRow => {
-                            matched.push({
-                                ...solRow,
-                                _vici_lead_id: row[leadKey],
-                                _vici_list_id: row[listKey],
-                                _vici_status: sVal
-                            });
+                    // Si es archivo Vicidial, requerimos lead_id y list_id reales
+                    if (!cruceSqlMode && (!leadKey || !listKey || !row[leadKey] || !row[listKey])) return;
+
+                    targetRutsMap.get(rut).forEach(solRow => {
+                        matched.push({
+                            ...solRow,
+                            _vici_lead_id: leadVal,
+                            _vici_list_id: listVal,
+                            _vici_status: sVal,
+                            _vici_status_name: sVal
                         });
+                    });
 
-                        if (sVal) uniqueStatuses.add(sVal);
-                        matchedRuts.add(rut);
-                    }
+                    if (sVal) uniqueStatuses.add(sVal);
+                    matchedRuts.add(rut);
                 });
 
                 // 3. Aislar los NO CRUZADOS
@@ -3912,6 +4278,27 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
             }
         };
 
+        const ejecutarSQLEstrategia = async () => {
+            if (!sqlResult) return;
+            if (!window.nexusAPI) { setPanelMessage({ type: 'error', text: 'Sin conexion SQL activa.' }); return; }
+            setEjecutandoSQL(true);
+            setPanelMessage({ type: '', text: '' });
+            try {
+                const sentencias = sqlResult.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('--'));
+                let ok = 0, err = 0, errMsg = '';
+                for (const sql of sentencias) {
+                    const r = await window.nexusAPI.executeSQL(sql);
+                    if (r.success) ok++;
+                    else { err++; errMsg = r.error || errMsg; }
+                }
+                if (err === 0) setPanelMessage({ type: 'success', text: `Ejecutadas ${ok} sentencias en MySQL/Vicidial.` });
+                else setPanelMessage({ type: 'warning', text: `${ok} OK / ${err} con error. Ultimo: ${errMsg}` });
+            } catch (e) {
+                setPanelMessage({ type: 'error', text: 'Error al ejecutar: ' + e.message });
+            }
+            setEjecutandoSQL(false);
+        };
+
         const priorizadosCount = preMatchData.filter(r => statusFilters[r._vici_status_name]).length;
 
         return (
@@ -3963,11 +4350,27 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                                 </div>
                             ) : (
                                 <div className="flex flex-col gap-2">
-                                    <textarea style={{ width: '100%', minHeight: '80px', padding: '0.5rem', border: '2px solid #3b82f6', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.8rem', resize: 'vertical', boxSizing: 'border-box' }} value={cruceSqlQuery} onChange={e => setCruceSqlQuery(e.target.value)} placeholder="SELECT RUT, lead_id, list_id, status FROM tabla WHERE..." />
+                                    <div className="bg-red-50 border border-red-300 rounded p-2 text-xs text-red-800 font-bold">
+                                        ⚠️ La query debe incluir: <code>lead_id, vendor_lead_code, list_id, status</code>. Sin estos campos el cruce no funcionará.
+                                    </div>
+                                    <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-2 flex flex-col gap-1">
+                                        <label className="text-xs font-bold text-indigo-800">📋 Lista(s) vigente(s) <span className="text-red-500">*</span></label>
+                                        <input type="text" value={cruceSqlListasEst} onChange={e => { setCruceSqlListasEst(e.target.value); setCruceSqlData(null); const q = buildUnionAllQuery(e.target.value, 'vl.lead_id, vl.vendor_lead_code, list_id, status, base, entry_date, user', getPrimerDiaMesGlobal(), 'Estrategia'); setCruceSqlQuery(q ? `-- Resultante Estrategias\n${q};` : '-- ⚠️ Ingresa la(s) lista(s) vigente(s) para generar la query.'); }} placeholder="Ej: 6018, 6020" className="w-full border border-indigo-300 rounded p-1.5 text-sm font-mono outline-none focus:border-indigo-500 bg-white" />
+                                        <p className="text-[10px] text-indigo-600">Separadas por coma. La fecha se ajusta al primer día del mes en curso.</p>
+                                    </div>
+                                    <div className="bg-amber-50 border border-amber-200 rounded p-2 text-[10px] text-amber-800 font-bold">⚠️ Fecha calculada automáticamente al primer día del mes. Puedes editar la query si necesitas otra fecha.</div>
+                                    <textarea style={{ width: '100%', minHeight: '120px', padding: '0.5rem', border: '2px solid #3b82f6', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.8rem', resize: 'vertical', boxSizing: 'border-box' }} value={cruceSqlQuery} onChange={e => setCruceSqlQuery(e.target.value)} />
                                     <button type="button" style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.8rem', background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', alignSelf: 'flex-start' }} onClick={async () => {
-                                        if (!cruceSqlQuery.trim()) return;
-                                        const r = await window.nexusAPI.executeSQL(cruceSqlQuery);
+                                        if (!cruceSqlListasEst.trim()) { setPanelMessage({ type: 'error', text: '⚠️ Ingresa al menos una lista vigente antes de ejecutar.' }); return; }
+                                        const qFinalEst = buildUnionAllQuery(cruceSqlListasEst, 'vl.lead_id, vl.vendor_lead_code, list_id, status, base, entry_date, user', getPrimerDiaMesGlobal(), 'Estrategia');
+                                        if (!qFinalEst) return;
+                                        const queryEst = `-- Resultante Estrategias\n${qFinalEst};`;
+                                        const r = await window.nexusAPI.executeSQL(queryEst);
                                         if (!r.success) { setPanelMessage({ type: 'error', text: 'Error SQL: ' + r.error }); return; }
+                                        // Validar campos mínimos
+                                        const cols = Object.keys(r.data[0] || {}).map(k => k.toLowerCase());
+                                        const faltantes = ['lead_id', 'vendor_lead_code', 'list_id', 'status'].filter(f => !cols.includes(f));
+                                        if (faltantes.length > 0) { setPanelMessage({ type: 'error', text: `⚠️ Faltan columnas requeridas: ${faltantes.join(', ')}` }); return; }
                                         setCruceSqlData(r.data);
                                         setPanelMessage({ type: 'success', text: `${r.data.length} registros cargados desde SQL.` });
                                     }}>⚡ Ejecutar</button>
@@ -4066,6 +4469,20 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                                 <span><strong>GUÍA OPERATIVA:</strong> Recuerde ejecutar esta query en MySQL y activar la marca de <strong>tribunal_12</strong> en el filtro de la campaña.</span>
                             </div>
 
+                            <div className="flex flex-wrap items-center gap-3 mb-2 p-2 bg-gray-50 border border-gray-200 rounded-lg">
+                                <span className="text-xs font-bold text-gray-600">Modo:</span>
+                                <label className={`flex items-center gap-1.5 text-xs font-bold cursor-pointer px-2 py-1 rounded border-2 transition-colors ${modoEjecucion === 'manual' ? 'border-slate-500 bg-slate-100 text-slate-800' : 'border-gray-200 bg-white text-gray-500'}`}>
+                                    <input type="radio" name={`modo_est_${campaignCode}`} value="manual" checked={modoEjecucion === 'manual'} onChange={() => setModoEjecucion('manual')} /> Manual
+                                </label>
+                                <label className={`flex items-center gap-1.5 text-xs font-bold cursor-pointer px-2 py-1 rounded border-2 transition-colors ${modoEjecucion === 'automatico' ? 'border-green-500 bg-green-50 text-green-800' : 'border-gray-200 bg-white text-gray-500'}`}>
+                                    <input type="radio" name={`modo_est_${campaignCode}`} value="automatico" checked={modoEjecucion === 'automatico'} onChange={() => setModoEjecucion('automatico')} /> Ejecutar directo
+                                </label>
+                                {modoEjecucion === 'automatico' && (
+                                    <button type="button" onClick={ejecutarSQLEstrategia} disabled={ejecutandoSQL} className="ml-auto bg-green-700 hover:bg-green-800 disabled:bg-gray-400 text-white font-bold text-xs px-4 py-1.5 rounded flex items-center gap-1.5 transition-colors">
+                                        {ejecutandoSQL ? <><div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Ejecutando...</> : <><Icon name="zap" size={13} /> Ejecutar en MySQL</>}
+                                    </button>
+                                )}
+                            </div>
                             <textarea readOnly className="w-full h-32 p-3 text-xs font-mono bg-slate-900 text-emerald-400 rounded outline-none shadow-inner resize-none" value={sqlResult} />
                         </div>
                     )}
@@ -6548,6 +6965,2548 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
 
 
     // ========================================================================
+    // TAREA 12: Bajas BCO Chile
+    // ========================================================================
+    const TaskBajasBCH = ({ Icon, addToast }) => {
+
+        const [bajasFile, setBajasFile] = useState(null);
+        const [bajasFileName, setBajasFileName] = useState('');
+        const [bajasRowIds, setBajasRowIds] = useState([]);
+        const [fechaBaja, setFechaBaja] = useState(new Date().toISOString().split('T')[0]);
+        const [modoEjecucion, setModoEjecucion] = useState('manual');
+        const [isProcessing, setIsProcessing] = useState(false);
+        const [panelMessage, setPanelMessage] = useState({ type: '', text: '' });
+        const [reporte, setReporte] = useState(null);
+        const [sqlBloqueo, setSqlBloqueo] = useState('');
+
+        const getFecha = () => fechaBaja.replace(/-/g, '');
+
+        const getMesCarga = () => {
+            const d = new Date(fechaBaja + 'T12:00:00');
+            const meses = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+            return `${meses[d.getMonth()]}_${String(d.getFullYear()).slice(-2)}_Excl`;
+        };
+
+        const readFileLocal = (file) => new Promise((resolve, reject) => {
+            if (file.name.toLowerCase().match(/\.(csv|txt)$/)) {
+                window.Papa.parse(file, { header: true, skipEmptyLines: true, complete: r => resolve(r.data), error: reject });
+                return;
+            }
+            const reader = new FileReader();
+            reader.onload = e => {
+                try {
+                    const wb = window.XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+                    resolve(window.XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' }));
+                } catch (err) { reject(err); }
+            };
+            reader.readAsArrayBuffer(file);
+        });
+
+        const handleFileLoad = async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            setBajasFile(file);
+            setBajasFileName(file.name);
+            setBajasRowIds([]);
+            setReporte(null);
+            setSqlBloqueo('');
+            setPanelMessage({ type: '', text: '' });
+            try {
+                const data = await readFileLocal(file);
+                const rowIdCol = Object.keys(data[0] || {}).find(k => /row_?id/i.test(k));
+                if (!rowIdCol) throw new Error('No se encontró columna ROW_ID en el archivo.');
+                const ids = [...new Set(data.map(r => String(r[rowIdCol] || '').trim()).filter(Boolean))];
+                setBajasRowIds(ids);
+                setPanelMessage({ type: 'success', text: `${ids.length} ROW_IDs únicos cargados desde "${file.name}".` });
+            } catch (err) {
+                setPanelMessage({ type: 'error', text: 'Error al leer el archivo: ' + err.message });
+            }
+        };
+
+        const handleProcesar = async () => {
+            if (bajasRowIds.length === 0) { setPanelMessage({ type: 'warning', text: 'Primero carga el archivo de bajas.' }); return; }
+            if (!window.nexusAPI) { setPanelMessage({ type: 'error', text: 'No hay conexión SQL activa.' }); return; }
+
+            setIsProcessing(true);
+            setPanelMessage({ type: '', text: '' });
+            setSqlBloqueo('');
+            setReporte(null);
+
+            try {
+                const idsStr = bajasRowIds.map(id => `'${id}'`).join(',');
+                const fecha = getFecha();
+                const mesCarga = getMesCarga();
+
+                // Query optimizada: trae candidatos de ambas campañas en una sola consulta
+                const qCandidatos = `
+SET LANGUAGE Spanish;
+DECLARE @MESCARGA VARCHAR(20) = CONCAT(UPPER(LEFT(DATENAME(MONTH,GETDATE()),1))+LOWER(SUBSTRING(DATENAME(MONTH,GETDATE()),2,LEN(DATENAME(MONTH,GETDATE())))),'_',RIGHT(CAST(YEAR(GETDATE()) AS VARCHAR),2));
+SELECT a.INDICE, a.ROW_ID, b.STATUS, a.MESCARGA, 'CONSUMO' AS CAMPAIGN
+FROM CustomerBancodeChile..CLIENTE_BANCO_DE_CHILE_CONSUMO a
+JOIN CustomerBancodeChile..C1_BANCO_DE_CHILE_CONSUMO b ON a.INDICE = b.INDICE
+WHERE a.MESCARGA = @MESCARGA
+AND a.ROW_ID IN (${idsStr})
+AND (b.STATUS IN (8,89,90,91,92,93,94,95,96,97,98,99,100,101,200) OR b.STATUS IS NULL)
+UNION ALL
+SELECT a.INDICE, a.ROW_ID, b.STATUS, a.MESCARGA, 'DERIVACION' AS CAMPAIGN
+FROM CustomerBancodeChile..CLIENTE_BANCO_DE_CHILE_CONSUMO_DERIVACION a
+JOIN CustomerBancodeChile..C1_BANCO_DE_CHILE_CONSUMO_DERIVACION b ON a.INDICE = b.INDICE
+WHERE a.MESCARGA = @MESCARGA
+AND a.ROW_ID IN (${idsStr})
+AND (b.STATUS IN (8,89,90,91,92,93,94,95,96,97,98,99,100,101,200) OR b.STATUS IS NULL)`;
+
+                const rCandidatos = await window.nexusAPI.executeSQL(qCandidatos);
+                if (!rCandidatos.success) throw new Error(rCandidatos.error);
+                if (!rCandidatos.data || rCandidatos.data.length === 0) {
+                    setPanelMessage({ type: 'warning', text: 'No se encontraron registros para dar de baja en ninguna campaña.' });
+                    setIsProcessing(false);
+                    return;
+                }
+
+                // Separar por campaña
+                const consumo = rCandidatos.data.filter(r => r.CAMPAIGN === 'CONSUMO');
+                const derivacion = rCandidatos.data.filter(r => r.CAMPAIGN === 'DERIVACION');
+
+                // Construir queries agrupadas por campaña
+                let queries = `-- ============================================================\n-- BAJAS BCH - ${rCandidatos.data.length} registros\n-- Fecha: ${fecha} | MESCARGA_Excl: ${mesCarga}\n-- CONSUMO: ${consumo.length} | DERIVACIÓN: ${derivacion.length}\n-- ============================================================\n\n`;
+
+                const buildQueries = (registros, tablaCliente, tablaC1) => {
+                    if (registros.length === 0) return '';
+                    const indices = registros.map(r => r.INDICE).join(',');
+                    return `UPDATE [CustomerBancodeChile].[dbo].[${tablaCliente}]\nSET FECHA_BAJA = '${fecha}', MESCARGA = '${mesCarga}'\nWHERE INDICE IN (${indices});\n\nUPDATE [CustomerBancodeChile].[dbo].[${tablaC1}]\nSET PRIORITE = '-11', RAPPEL = 'Z999999999999', VERSOP = '-1'\nWHERE INDICE IN (${indices});\n\n`;
+                };
+
+                if (consumo.length > 0) {
+                    queries += `-- CONSUMO (${consumo.length} registros)\n`;
+                    queries += buildQueries(consumo, 'CLIENTE_BANCO_DE_CHILE_CONSUMO', 'C1_BANCO_DE_CHILE_CONSUMO');
+                }
+                if (derivacion.length > 0) {
+                    queries += `-- DERIVACIÓN (${derivacion.length} registros)\n`;
+                    queries += buildQueries(derivacion, 'CLIENTE_BANCO_DE_CHILE_CONSUMO_DERIVACION', 'C1_BANCO_DE_CHILE_CONSUMO_DERIVACION');
+                }
+
+                setSqlBloqueo(queries);
+
+                // Reporte
+                const rep = {
+                    recibidas: bajasRowIds.length,
+                    consumo: consumo.length,
+                    derivacion: derivacion.length,
+                    total: rCandidatos.data.length
+                };
+
+                if (modoEjecucion === 'automatico') {
+                    let okConsumo = false, okDerivacion = false, errMsg = '';
+                    if (consumo.length > 0) {
+                        const indicesConsumo = consumo.map(r => r.INDICE).join(',');
+                        const r1 = await window.nexusAPI.executeSQL(`UPDATE [CustomerBancodeChile].[dbo].[CLIENTE_BANCO_DE_CHILE_CONSUMO] SET FECHA_BAJA = '${fecha}', MESCARGA = '${mesCarga}' WHERE INDICE IN (${indicesConsumo})`);
+                        const r2 = await window.nexusAPI.executeSQL(`UPDATE [CustomerBancodeChile].[dbo].[C1_BANCO_DE_CHILE_CONSUMO] SET PRIORITE = '-11', RAPPEL = 'Z999999999999', VERSOP = '-1' WHERE INDICE IN (${indicesConsumo})`);
+                        okConsumo = r1.success && r2.success;
+                        if (!okConsumo) errMsg += r1.error || r2.error;
+                    }
+                    if (derivacion.length > 0) {
+                        const indicesDerivacion = derivacion.map(r => r.INDICE).join(',');
+                        const r3 = await window.nexusAPI.executeSQL(`UPDATE [CustomerBancodeChile].[dbo].[CLIENTE_BANCO_DE_CHILE_CONSUMO_DERIVACION] SET FECHA_BAJA = '${fecha}', MESCARGA = '${mesCarga}' WHERE INDICE IN (${indicesDerivacion})`);
+                        const r4 = await window.nexusAPI.executeSQL(`UPDATE [CustomerBancodeChile].[dbo].[C1_BANCO_DE_CHILE_CONSUMO_DERIVACION] SET PRIORITE = '-11', RAPPEL = 'Z999999999999', VERSOP = '-1' WHERE INDICE IN (${indicesDerivacion})`);
+                        okDerivacion = r3.success && r4.success;
+                        if (!okDerivacion) errMsg += r3.error || r4.error;
+                    }
+                    rep.ejecutado = true;
+                    rep.exito = (!consumo.length || okConsumo) && (!derivacion.length || okDerivacion);
+                    rep.errMsg = errMsg;
+                }
+
+                setReporte(rep);
+                setPanelMessage({ type: 'success', text: `Proceso completado: ${rCandidatos.data.length} bajas ${modoEjecucion === 'automatico' ? 'aplicadas' : 'listas para ejecutar'}.` });
+
+            } catch (err) {
+                setPanelMessage({ type: 'error', text: 'Error: ' + err.message });
+            }
+            setIsProcessing(false);
+        };
+
+        const copiarSQL = async () => {
+            try { await navigator.clipboard.writeText(sqlBloqueo); addToast('Queries copiadas al portapapeles.', 'success'); }
+            catch { addToast('Error al copiar.', 'error'); }
+        };
+
+        return (
+            <div className="flex flex-col gap-5 p-1">
+
+                {/* ENCABEZADO */}
+                <div className="bg-red-900 rounded-lg p-4 text-white">
+                    <h3 className="text-lg font-bold flex items-center gap-2"><Icon name="x-circle" size={20} /> Bajas BCO Chile — Consumo y Derivación</h3>
+                    <p className="text-red-200 text-xs mt-1">Aplica bajas diarias en ambas campañas BCH cruzando con el archivo del cliente.</p>
+                </div>
+
+                {/* CONFIGURACIÓN */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+
+                    {/* ARCHIVO */}
+                    <div className="border border-red-200 bg-red-50 rounded-lg p-4 flex flex-col gap-3">
+                        <h4 className="font-bold text-red-800 text-sm flex items-center gap-2"><Icon name="upload" size={15} /> 1. Archivo de Bajas</h4>
+                        <label className="border-2 border-dashed border-red-300 bg-white rounded-lg p-4 text-center cursor-pointer hover:border-red-500 transition-colors">
+                            <input type="file" accept=".xlsx,.xls,.csv,.txt" className="hidden" onChange={handleFileLoad} />
+                            <Icon name="file-text" size={24} className="mx-auto text-red-400 mb-1" />
+                            <p className="text-xs text-red-600 font-bold">{bajasFileName || 'Clic para cargar'}</p>
+                            {bajasRowIds.length > 0 && <p className="text-xs text-green-600 font-bold mt-1">{bajasRowIds.length} ROW_IDs</p>}
+                        </label>
+                    </div>
+
+                    {/* FECHA */}
+                    <div className="border border-gray-200 bg-gray-50 rounded-lg p-4 flex flex-col gap-3">
+                        <h4 className="font-bold text-gray-700 text-sm flex items-center gap-2"><Icon name="calendar" size={15} /> 2. Fecha de Baja</h4>
+                        <input type="date" className="border border-gray-300 rounded p-2 text-sm outline-none focus:border-red-500 bg-white font-medium" value={fechaBaja} onChange={e => setFechaBaja(e.target.value)} />
+                        <p className="text-xs text-gray-500">FECHA_BAJA: <strong>{getFecha()}</strong></p>
+                        <p className="text-xs text-gray-500">MESCARGA: <strong>{getMesCarga()}</strong></p>
+                    </div>
+
+                    {/* MODO */}
+                    <div className="border border-gray-200 bg-gray-50 rounded-lg p-4 flex flex-col gap-3">
+                        <h4 className="font-bold text-gray-700 text-sm flex items-center gap-2"><Icon name="settings" size={15} /> 3. Modo de Ejecución</h4>
+                        <div className="flex flex-col gap-2">
+                            <label className={`flex items-center gap-2 p-2 rounded cursor-pointer border-2 transition-colors ${modoEjecucion === 'manual' ? 'border-red-500 bg-red-50' : 'border-gray-200 bg-white'}`}>
+                                <input type="radio" name="modoBajas" value="manual" checked={modoEjecucion === 'manual'} onChange={() => setModoEjecucion('manual')} />
+                                <div><p className="text-sm font-bold text-gray-800">📋 Generar Query</p><p className="text-xs text-gray-500">Copia y ejecuta manualmente</p></div>
+                            </label>
+                            <label className={`flex items-center gap-2 p-2 rounded cursor-pointer border-2 transition-colors ${modoEjecucion === 'automatico' ? 'border-green-500 bg-green-50' : 'border-gray-200 bg-white'}`}>
+                                <input type="radio" name="modoBajas" value="automatico" checked={modoEjecucion === 'automatico'} onChange={() => setModoEjecucion('automatico')} />
+                                <div><p className="text-sm font-bold text-gray-800">⚡ Ejecutar Automático</p><p className="text-xs text-gray-500">Requiere conexión SQL activa</p></div>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                {/* BOTÓN PROCESAR */}
+                <button type="button" onClick={handleProcesar} disabled={isProcessing || bajasRowIds.length === 0} className="w-full bg-red-800 hover:bg-red-900 disabled:bg-gray-400 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition-colors shadow-md">
+                    {isProcessing ? <><div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Procesando...</> : <><Icon name="zap" size={18} /> Procesar Bajas</>}
+                </button>
+
+                {/* MENSAJE */}
+                {panelMessage.text && (
+                    <div className={`rounded-lg p-3 text-sm font-medium ${panelMessage.type === 'success' ? 'bg-green-50 border border-green-300 text-green-800' : panelMessage.type === 'error' ? 'bg-red-50 border border-red-300 text-red-800' : 'bg-amber-50 border border-amber-300 text-amber-800'}`}>
+                        {panelMessage.text}
+                    </div>
+                )}
+
+                {/* REPORTE */}
+                {reporte && (
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 flex flex-col gap-3">
+                        <h4 className="font-bold text-gray-700 text-sm flex items-center gap-2"><Icon name="bar-chart-2" size={15} /> Reporte de Bajas</h4>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
+                            <div className="bg-gray-50 p-3 rounded border border-gray-200">
+                                <div className="text-2xl font-black text-gray-700">{reporte.recibidas}</div>
+                                <div className="text-xs text-gray-500 uppercase font-bold">Recibidas</div>
+                            </div>
+                            <div className="bg-blue-50 p-3 rounded border border-blue-200">
+                                <div className="text-2xl font-black text-blue-700">{reporte.consumo}</div>
+                                <div className="text-xs text-blue-500 uppercase font-bold">Consumo</div>
+                            </div>
+                            <div className="bg-purple-50 p-3 rounded border border-purple-200">
+                                <div className="text-2xl font-black text-purple-700">{reporte.derivacion}</div>
+                                <div className="text-xs text-purple-500 uppercase font-bold">Derivación</div>
+                            </div>
+                            <div className="bg-red-50 p-3 rounded border border-red-200">
+                                <div className="text-2xl font-black text-red-700">{reporte.total}</div>
+                                <div className="text-xs text-red-500 uppercase font-bold">Total Aplicadas</div>
+                            </div>
+                        </div>
+                        {reporte.ejecutado && (
+                            <div className={`rounded p-2 text-xs font-bold ${reporte.exito ? 'bg-green-50 text-green-800 border border-green-300' : 'bg-red-50 text-red-800 border border-red-300'}`}>
+                                {reporte.exito ? '✅ Bajas aplicadas exitosamente en el motor.' : `❌ Error al ejecutar: ${reporte.errMsg}`}
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* QUERIES */}
+                {sqlBloqueo && (
+                    <div className="flex flex-col gap-2">
+                        <div className="flex justify-between items-center">
+                            <h4 className="font-bold text-gray-700 text-sm flex items-center gap-2"><Icon name="code" size={15} /> Queries de Baja</h4>
+                            <button type="button" onClick={copiarSQL} className="bg-gray-800 hover:bg-gray-900 text-white text-xs font-bold px-3 py-1.5 rounded flex items-center gap-1">
+                                <Icon name="copy" size={13} /> Copiar
+                            </button>
+                        </div>
+                        <pre className="bg-gray-900 text-green-300 text-xs p-4 rounded-lg overflow-x-auto whitespace-pre-wrap font-mono max-h-64 overflow-y-auto">{sqlBloqueo}</pre>
+                        {modoEjecucion === 'manual' && (
+                            <div className="bg-amber-50 border border-amber-400 rounded p-3 text-xs text-amber-800">
+                                <strong>⚠️ Importante:</strong> Ejecuta estas queries en el motor de base de datos <strong>antes</strong> de reportar las bajas. Los registros quedarán con PRIORITE = -11 y RAPPEL = Z999999999999.
+                            </div>
+                        )}
+                    </div>
+                )}
+            </div>
+        );
+    };
+
+    // ========================================================================
+    // TAREA 13: Agendamiento Vocalcom
+    // ========================================================================
+    const TaskAgendamientoVocalcom = ({ Icon, addToast }) => {
+
+        // --- ESTADOS DE CONFIGURACIÓN ---
+        const [fechaAgenda, setFechaAgenda] = useState(new Date().toISOString().split('T')[0]);
+        const [horaAgenda, setHoraAgenda] = useState('2300');
+        const [modoEjecucion, setModoEjecucion] = useState('manual');
+        const [isLoading, setIsLoading] = useState(false);
+        const [panelMessage, setPanelMessage] = useState({ type: '', text: '' });
+
+        // --- ESTADOS DE CAMPAÑAS Y AGENTES ---
+        const [campanas, setCampanas] = useState([]);
+        const [agentes, setAgentes] = useState([]);
+        const [cargandoCatalogos, setCargandoCatalogos] = useState(false);
+
+        // --- ESTADOS DE GRILLA ---
+        const [filas, setFilas] = useState([{ id: Date.now(), campana: '', tablaCliente: '', agente: '', indice: '', statusData: null, loadingStatus: false }]);
+        const [modoEntrada, setModoEntrada] = useState('manual'); // 'manual' | 'archivo' | 'texto' | 'fix' | 'consulta'
+        const [textoLote, setTextoLote] = useState('');
+        const [sqlResult, setSqlResult] = useState('');
+
+        // --- ESTADOS FIX AGENDA ---
+        const [fixCampana, setFixCampana] = useState(null);           // { Result, TablaCliente, NombreCampana }
+        const [fixCampoMes, setFixCampoMes] = useState('');           // 'MESCARGA' | 'MES_CARGA'
+        const [fixMesCarga, setFixMesCarga] = useState(() => {        // valor editable Mes_AA
+            const d = new Date();
+            const meses = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+            return `${meses[d.getMonth()]}_${String(d.getFullYear()).slice(-2)}`;
+        });
+        const [fixRows, setFixRows] = useState([]);                   // registros encontrados
+        const [fixConsultando, setFixConsultando] = useState(false);
+        const [fixProcesando, setFixProcesando] = useState(false);
+        const [fixSqlAcumulado, setFixSqlAcumulado] = useState('');
+        const [fixMessage, setFixMessage] = useState({ type: '', text: '' });
+
+        // --- ESTADOS CONSULTAR REGISTRO ---
+        const [csCampana, setCsCampana] = useState(null);             // campaña seleccionada
+        const [csCampoMes, setCsCampoMes] = useState('');             // campo mes detectado
+        const [csMesCarga, setCsMesCarga] = useState(() => {          // valor editable
+            const d = new Date();
+            const meses = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+            return `${meses[d.getMonth()]}_${String(d.getFullYear()).slice(-2)}`;
+        });
+        const [csCampoIdent, setCsCampoIdent] = useState('');         // columna identificador detectada
+        const [csValorIdent, setCsValorIdent] = useState('');         // valor ingresado por usuario
+        const [csResultado, setCsResultado] = useState(null);         // registro encontrado
+        const [csExcluido, setCsExcluido] = useState(false);          // si está en mes excluido
+        const [csHabilitar, setCsHabilitar] = useState(false);        // check habilitar excluido
+        const [csAgenteSeleccionado, setCsAgenteSeleccionado] = useState(''); // agente para agendar
+        const [csConsultando, setCsConsultando] = useState(false);
+        const [csEjecutando, setCsEjecutando] = useState(false);
+        const [csSqlResult, setCsSqlResult] = useState('');
+        const [csMessage, setCsMessage] = useState({ type: '', text: '' });
+
+        // --- ESTADOS DE STAGING (modos Pegar y Archivo) ---
+        const [stagingRows, setStagingRows] = useState([]);         // filas cargadas sin campaña aún
+        const [selectedIds, setSelectedIds] = useState(new Set());  // checkboxes activos
+        const [bulkCampaign, setBulkCampaign] = useState('');       // campaña del panel masivo
+        const [bulkAgent, setBulkAgent] = useState('');             // agente del panel masivo
+        const [extraWhere, setExtraWhere] = useState('');           // filtro WHERE adicional
+        const [extraWhereOpen, setExtraWhereOpen] = useState(false);// panel colapsable abierto
+        const [detectedColumns, setDetectedColumns] = useState([]); // columnas detectadas del 1er verStatus
+        const [activeExtraCols, setActiveExtraCols] = useState(new Set()); // columnas extras activas
+        const [stagingProgress, setStagingProgress] = useState({ current: 0, total: 0, running: false });
+
+        // --- ESTADOS DE NIVABS ---
+        const [limpiarIntentos, setLimpiarIntentos] = useState(false);
+        const [nivabsValue, setNivabsValue] = useState(1);
+
+        // --- UTILIDADES ---
+        const getRappel = () => {
+            const f = fechaAgenda.replace(/-/g, '');
+            const h = horaAgenda.replace(':', '').padStart(4, '0');
+            return `T${f}${h}`;
+        };
+
+        const getDate = () => fechaAgenda.replace(/-/g, '');
+
+        // --- CARGAR CATÁLOGOS ---
+        const cargarCatalogos = async () => {
+            if (!window.nexusAPI) { addToast('No hay conexión SQL activa. Conéctate desde Administración.', 'error'); return; }
+            setCargandoCatalogos(true);
+            setPanelMessage({ type: '', text: '' });
+            try {
+                const qCampanas = `
+                SELECT 
+                    CONCAT('[', Base, ']..[C', customerId, '_', Name, ']') AS Result,
+                    CONCAT('[', Base, ']..[CLIENTE_', CampaignId, ']') AS TablaCliente,
+                    CampaignId AS NombreCampana
+                FROM HN_Admin..ListCallFiles
+                WHERE CampaignId IS NOT NULL AND CampaignId <> ''
+                ORDER BY CampaignId ASC
+            `;
+
+                const qAgentes = `select CONCAT('C',customerId,'-',Ident) as Codigo_CallFile, a.Ident, customerId, CONCAT(a.LastName,', ',a.FirstName) as TV from HN_Admin..ListAgents a join HN_Admin..HumanResource b on a.Oid=b.Oid where customerId in (1,2,3,4,5,6,7,8) order by customerId, a.Ident`;
+
+                const [rC, rA] = await Promise.all([
+                    window.nexusAPI.executeSQL(qCampanas),
+                    window.nexusAPI.executeSQL(qAgentes)
+                ]);
+
+                if (!rC.success) throw new Error('Campañas: ' + rC.error);
+                if (!rA.success) throw new Error('Agentes: ' + rA.error);
+
+                setCampanas(rC.data);
+                setAgentes(rA.data);
+                setPanelMessage({ type: 'success', text: `${rC.data.length} campañas y ${rA.data.length} agentes cargados al instante.` });
+
+            } catch (err) {
+                setPanelMessage({ type: 'error', text: 'Error al cargar catálogos: ' + err.message });
+            }
+            setCargandoCatalogos(false);
+        };
+
+        // --- GRILLA: CRUD ---
+        const agregarFila = () => {
+            setFilas([...filas, { id: Date.now(), campana: '', tablaCliente: '', agente: '', indice: '', statusData: null, loadingStatus: false }]);
+        };
+
+        const eliminarFila = (id) => setFilas(prev => prev.filter(f => f.id !== id));
+
+        const actualizarFila = (id, campo, valor) => setFilas(prev => prev.map(f => f.id === id ? { ...f, [campo]: valor, statusData: null } : f));
+
+        // --- LOTE: PARSEAR TEXTO ---
+        const parsearLote = () => {
+            // Normalizar saltos de línea (Excel pega con \r\n)
+            const lineas = textoLote.trim().replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').filter(l => l.trim());
+            const nuevas = lineas.map(l => {
+                // Separar por tab (copia desde Excel), coma, punto y coma o pipe
+                const partes = l.split(/\t|,|;|\|/).map(p => p.trim());
+                // Formato nuevo: Índice | Agente (opcional) — sin campaña en esta etapa
+                const indice = partes[0] || '';
+                const agente = partes[1] || '';
+                return {
+                    id: Date.now() + Math.random(),
+                    indice,
+                    agente,
+                    campana: '',
+                    tablaCliente: '',
+                    statusData: null,
+                    loadingStatus: false
+                };
+            }).filter(r => r.indice !== '');
+            if (nuevas.length === 0) { addToast('No se detectaron índices válidos.', 'warning'); return; }
+            setStagingRows(nuevas);
+            setSelectedIds(new Set());
+            setDetectedColumns([]);
+            setActiveExtraCols(new Set());
+            setTextoLote('');
+            addToast(`${nuevas.length} registros cargados al staging.`, 'success');
+        };
+
+        // --- LOTE: DESDE ARCHIVO ---
+        const parsearArchivo = async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            try {
+                let data = [];
+                if (file.name.toLowerCase().match(/\.(csv|txt)$/)) {
+                    await new Promise((res, rej) => window.Papa.parse(file, { header: true, skipEmptyLines: true, complete: r => { data = r.data; res(); }, error: rej }));
+                } else {
+                    const buf = await file.arrayBuffer();
+                    const wb = window.XLSX.read(new Uint8Array(buf), { type: 'array' });
+                    data = window.XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' });
+                }
+                if (data.length === 0) { addToast('Archivo vacío.', 'warning'); return; }
+                const cols = Object.keys(data[0]);
+
+                // Normalización de headers
+                const norm = str => str.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+                const normCols = cols.map(c => ({ original: c, norm: norm(c) }));
+
+                // Detección de agente PRIMERO para que no compita con índice
+                const agenteEntry = normCols.find(c =>
+                    /^(agente|ident|ejecutivo|codigo_agente|cod_agente|agente_id)$/.test(c.norm)
+                ) || normCols.find(c => /agente|ident|ejecutivo/.test(c.norm)) || null;
+
+                // Detección de índice excluyendo la columna ya asignada a agente
+                const indiceEntry = normCols.find(c =>
+                    c !== agenteEntry &&
+                    /^(indice|index|idx|id_cliente|id_cliente|codigo|cod|id)$/.test(c.norm)
+                ) || normCols.find(c =>
+                    c !== agenteEntry &&
+                    /indice|index|idx/.test(c.norm)
+                ) || normCols.find(c => c !== agenteEntry) || normCols[0];
+
+                const indiceCol = indiceEntry.original;
+                const agenteCol = agenteEntry ? agenteEntry.original : null;
+
+                // Toast informativo
+                addToast(`Columnas detectadas — Índice: "${indiceCol}"${agenteCol ? ` | Agente: "${agenteCol}"` : ' | Agente: no detectado'}`, 'info');
+
+                const nuevas = data
+                    .map(r => ({
+                        id: Date.now() + Math.random(),
+                        indice: String(r[indiceCol] || '').trim(),
+                        agente: agenteCol ? String(r[agenteCol] || '').trim() : '',
+                        campana: '',
+                        tablaCliente: '',
+                        statusData: null,
+                        loadingStatus: false
+                    }))
+                    .filter(r => r.indice !== '');
+
+                if (nuevas.length === 0) { addToast('No se encontraron índices válidos en el archivo.', 'warning'); return; }
+                setStagingRows(nuevas);
+                setSelectedIds(new Set());
+                setDetectedColumns([]);
+                setActiveExtraCols(new Set());
+                addToast(`${nuevas.length} registros cargados al staging desde archivo.`, 'success');
+            } catch (err) { addToast('Error al leer archivo: ' + err.message, 'error'); }
+        };
+
+        // --- VER STATUS DE UN ÍNDICE (modo manual) ---
+        const verStatus = async (id) => {
+            const fila = filas.find(f => f.id === id);
+            if (!fila.indice || !fila.campana || !fila.tablaCliente) { addToast('Completa campaña e índice.', 'warning'); return; }
+            if (!window.nexusAPI) { addToast('Sin conexión SQL activa.', 'error'); return; }
+            setFilas(prev => prev.map(f => f.id === id ? { ...f, loadingStatus: true } : f));
+            try {
+                // SELECT * silencioso para mapear columnas disponibles
+                if (detectedColumns.length === 0) {
+                    const qMap = `SELECT * FROM ${fila.tablaCliente} a JOIN ${fila.campana} b ON a.INDICE = b.INDICE WHERE a.INDICE=${fila.indice}`;
+                    const rMap = await window.nexusAPI.executeSQL(qMap);
+                    if (rMap.success && rMap.data && rMap.data.length > 0) {
+                        setDetectedColumns(Object.keys(rMap.data[0]));
+                    }
+                }
+                const whereExtra = extraWhere.trim() ? ` AND ${extraWhere.trim()}` : '';
+                const colExtra = activeExtraCols.size > 0 ? ', ' + [...activeExtraCols].join(', ') : '';
+                const q = `SELECT a.INDICE, STATUS, DETAIL, LIB_STATUS, LIB_DETAIL, ID_TV, TV, BASE, DATE as ULTIMA_GESTION, NIVABS as INTENTOS, substring(RAPPEL,2,8) as FECHA_AGENDA${colExtra} FROM ${fila.tablaCliente} a JOIN ${fila.campana} b ON a.INDICE = b.INDICE WHERE a.INDICE=${fila.indice}${whereExtra}`;
+                const r = await window.nexusAPI.executeSQL(q);
+                if (!r.success) throw new Error(r.error);
+                const statusVal = r.data && r.data.length > 0 ? r.data[0] : { error: 'Registro no encontrado en BD' };
+                setFilas(prev => prev.map(f => f.id === id ? { ...f, statusData: statusVal, loadingStatus: false } : f));
+                if (!r.data || r.data.length === 0) addToast('Índice no encontrado en esa campaña.', 'warning');
+            } catch (err) {
+                setFilas(prev => prev.map(f => f.id === id ? { ...f, statusData: { error: 'Error al consultar BD' }, loadingStatus: false } : f));
+                addToast('Error al consultar status: ' + err.message, 'error');
+            }
+        };
+
+        // --- STAGING: ASIGNACIÓN MASIVA ---
+        const aplicarAsignacionMasiva = () => {
+            if (selectedIds.size === 0) { addToast('Selecciona al menos una fila.', 'warning'); return; }
+            if (!bulkCampaign) { addToast('Selecciona una campaña para aplicar.', 'warning'); return; }
+            const selected = campanas.find(c => c.Result === bulkCampaign);
+            setStagingRows(prev => prev.map(r =>
+                selectedIds.has(r.id)
+                    ? { ...r, campana: selected ? selected.Result : bulkCampaign, tablaCliente: selected ? selected.TablaCliente : '', agente: bulkAgent || r.agente, statusData: null }
+                    : r
+            ));
+            addToast(`Campaña asignada a ${selectedIds.size} registros.`, 'success');
+        };
+
+        const toggleSelectAll = () => {
+            if (selectedIds.size === stagingRows.length) {
+                setSelectedIds(new Set());
+            } else {
+                setSelectedIds(new Set(stagingRows.map(r => r.id)));
+            }
+        };
+
+        const toggleSelect = (id) => {
+            setSelectedIds(prev => {
+                const next = new Set(prev);
+                next.has(id) ? next.delete(id) : next.add(id);
+                return next;
+            });
+        };
+
+        const eliminarStagingFila = (id) => {
+            setStagingRows(prev => prev.filter(r => r.id !== id));
+            setSelectedIds(prev => { const next = new Set(prev); next.delete(id); return next; });
+        };
+
+        // --- STAGING: CONSULTA UNO A UNO CON PROGRESO ---
+        const consultarSeleccionados = async () => {
+            if (!window.nexusAPI) { addToast('Sin conexión SQL activa.', 'error'); return; }
+            const targets = stagingRows.filter(r => selectedIds.has(r.id) && r.campana && r.indice);
+            if (targets.length === 0) { addToast('Selecciona filas con campaña e índice asignados.', 'warning'); return; }
+
+            setStagingProgress({ current: 0, total: targets.length, running: true });
+            const whereExtra = extraWhere.trim() ? ` AND ${extraWhere.trim()}` : '';
+
+            // Primer registro: SELECT * silencioso para mapear columnas disponibles
+            if (detectedColumns.length === 0) {
+                const primera = targets[0];
+                try {
+                    const qMap = `SELECT * FROM ${primera.tablaCliente} a JOIN ${primera.campana} b ON a.INDICE = b.INDICE WHERE a.INDICE=${primera.indice}${whereExtra}`;
+                    const rMap = await window.nexusAPI.executeSQL(qMap);
+                    if (rMap.success && rMap.data && rMap.data.length > 0) {
+                        setDetectedColumns(Object.keys(rMap.data[0]));
+                    }
+                } catch (err) { /* no bloqueamos si falla el mapeo */ }
+            }
+
+            for (let i = 0; i < targets.length; i++) {
+                const fila = targets[i];
+                setStagingProgress(p => ({ ...p, current: i + 1 }));
+                try {
+                    const colBase = `a.INDICE, STATUS, DETAIL, LIB_STATUS, LIB_DETAIL, ID_TV, TV, BASE, DATE as ULTIMA_GESTION, NIVABS as INTENTOS, substring(RAPPEL,2,8) as FECHA_AGENDA`;
+                    const colExtra = activeExtraCols.size > 0 ? ', ' + [...activeExtraCols].join(', ') : '';
+                    const q = `SELECT ${colBase}${colExtra} FROM ${fila.tablaCliente} a JOIN ${fila.campana} b ON a.INDICE = b.INDICE WHERE a.INDICE=${fila.indice}${whereExtra}`;
+                    const r = await window.nexusAPI.executeSQL(q);
+                    if (!r.success) throw new Error(r.error);
+                    const resultado = r.data && r.data.length > 0 ? r.data[0] : { error: 'Registro no encontrado' };
+                    setStagingRows(prev => prev.map(f => f.id === fila.id ? { ...f, statusData: resultado } : f));
+                } catch (err) {
+                    setStagingRows(prev => prev.map(f => f.id === fila.id ? { ...f, statusData: { error: err.message } } : f));
+                }
+            }
+            setStagingProgress({ current: 0, total: 0, running: false });
+            addToast(`Consulta completada para ${targets.length} registros.`, 'success');
+        };
+
+        // --- GENERAR / EJECUTAR ---
+        const procesarAgendamiento = async () => {
+            // Une ambas fuentes: modo manual (filas) + modo staging (stagingRows)
+            const filasManual = filas.filter(f => f.campana && f.agente && f.indice);
+            const filasStaging = stagingRows.filter(f => f.campana && f.agente && f.indice);
+            const filasValidas = [...filasManual, ...filasStaging];
+            if (filasValidas.length === 0) { addToast('No hay filas completas para procesar. Asegúrate de asignar campaña y agente.', 'warning'); return; }
+            if (!window.nexusAPI) { addToast('Sin conexión SQL activa.', 'error'); return; }
+
+            setIsLoading(true);
+            setPanelMessage({ type: '', text: '' });
+            setSqlResult('');
+
+            try {
+                const rappel = getRappel();
+                const fecha = getDate();
+                const nivabsCol = limpiarIntentos ? `, NIVABS=${nivabsValue}` : '';
+                let queries = `-- ============================================================\n-- AGENDAMIENTO VOCALCOM - ${filasValidas.length} registros\n-- Fecha: ${fechaAgenda} | Hora: ${horaAgenda} | RAPPEL: ${rappel}\n-- Limpiar Intentos: ${limpiarIntentos ? 'SI (NIVABS=' + nivabsValue + ')' : 'NO'}\n-- ============================================================\n\n`;
+
+                for (const fila of filasValidas) {
+                    // Obtener TV del agente seleccionado
+                    const agenteObj = agentes.find(a => String(a.Ident) === String(fila.agente) || a.Codigo_CallFile === fila.agente);
+                    const tv = agenteObj ? agenteObj.TV : fila.agente;
+                    const ident = agenteObj ? agenteObj.Ident : fila.agente;
+
+                    queries += `UPDATE ${fila.campana} SET PRIORITE=0, VERSOP=${ident}, ID_TV=${ident}, TV='${tv}', RAPPEL='${rappel}', STATUS=94, LIB_STATUS='VOLVER A LLAMAR', DETAIL=1, mixup=1, tzbegin=0900, tzend=2000, DATE='${fecha}'${nivabsCol} WHERE INDICE=${fila.indice};\n`;
+                }
+
+                setSqlResult(queries);
+
+                if (modoEjecucion === 'automatico') {
+                    let ok = 0, err = 0;
+                    for (const fila of filasValidas) {
+                        const agenteObj = agentes.find(a => String(a.Ident) === String(fila.agente) || a.Codigo_CallFile === fila.agente);
+                        const tv = agenteObj ? agenteObj.TV : fila.agente;
+                        const ident = agenteObj ? agenteObj.Ident : fila.agente;
+
+                        const q = `UPDATE ${fila.campana} SET PRIORITE=0, VERSOP=${ident}, ID_TV=${ident}, TV='${tv}', RAPPEL='${rappel}', STATUS=94, LIB_STATUS='VOLVER A LLAMAR', DETAIL=1, mixup=1, tzbegin=0900, tzend=2000, DATE='${fecha}'${nivabsCol} WHERE INDICE=${fila.indice}`;
+                        const r = await window.nexusAPI.executeSQL(q);
+                        r.success ? ok++ : err++;
+                    }
+                    setPanelMessage({ type: err > 0 ? 'warning' : 'success', text: `Ejecutado: ${ok} agendados correctamente${err > 0 ? `, ${err} con error` : ''}.` });
+                } else {
+                    setPanelMessage({ type: 'success', text: `Query generada para ${filasValidas.length} registros. Copia y ejecuta en el motor.` });
+                }
+            } catch (err) {
+                setPanelMessage({ type: 'error', text: 'Error: ' + err.message });
+            }
+            setIsLoading(false);
+        };
+
+        const copiarSQL = async () => {
+            try { await navigator.clipboard.writeText(sqlResult); addToast('Query copiada al portapapeles.', 'success'); }
+            catch { addToast('Error al copiar.', 'error'); }
+        };
+
+        // =====================================================================
+        // FIX AGENDA — funciones
+        // =====================================================================
+
+        // Mapeo silencioso al seleccionar campaña en Fix Agenda
+        const fixSeleccionarCampana = async (campResult) => {
+            const camp = campanas.find(c => c.Result === campResult);
+            if (!camp) return;
+            setFixCampana(camp);
+            setFixRows([]);
+            setFixSqlAcumulado('');
+            setFixMessage({ type: '', text: '' });
+            setFixCampoMes('');
+            if (!window.nexusAPI) return;
+            try {
+                const qMap = `SELECT TOP 1 * FROM ${camp.TablaCliente} a JOIN ${camp.Result} b ON a.INDICE = b.INDICE`;
+                const rMap = await window.nexusAPI.executeSQL(qMap);
+                if (rMap.success && rMap.data && rMap.data.length > 0) {
+                    const cols = Object.keys(rMap.data[0]);
+                    const mc = cols.find(c => c.toUpperCase() === 'MESCARGA') ? 'MESCARGA'
+                        : cols.find(c => c.toUpperCase() === 'MES_CARGA') ? 'MES_CARGA' : '';
+                    setFixCampoMes(mc);
+                }
+            } catch (e) { /* silencioso */ }
+        };
+
+        // Buscar registros con agenda rota
+        const fixBuscarRegistros = async () => {
+            if (!fixCampana) { setFixMessage({ type: 'warning', text: 'Selecciona una campaña primero.' }); return; }
+            if (!window.nexusAPI) { setFixMessage({ type: 'error', text: 'Sin conexión SQL activa.' }); return; }
+            const campoMes = fixCampoMes || 'MESCARGA';
+            setFixConsultando(true);
+            setFixRows([]);
+            setFixSqlAcumulado('');
+            setFixMessage({ type: '', text: '' });
+            try {
+                const q = `SELECT a.INDICE, b.ID_TV, b.TV FROM ${fixCampana.TablaCliente} a JOIN ${fixCampana.Result} b ON a.INDICE = b.INDICE WHERE a.${campoMes}='${fixMesCarga}' AND b.STATUS=94 AND b.RAPPEL='Z999999999999' AND b.PRIORITE>=0`;
+                const r = await window.nexusAPI.executeSQL(q);
+                if (!r.success) throw new Error(r.error);
+                if (!r.data || r.data.length === 0) {
+                    setFixMessage({ type: 'success', text: '✅ No se encontraron registros con agendas rotas en esta campaña. ¡Todo en orden!' });
+                    setFixConsultando(false);
+                    return;
+                }
+                // Poblar filas con agente pre-poblado desde el registro
+                const rows = r.data.map(row => ({
+                    id: Date.now() + Math.random(),
+                    indice: row.INDICE,
+                    id_tv: row.ID_TV,
+                    tv: row.TV,
+                    agenteSeleccionado: String(row.ID_TV || ''), // pre-poblado, editable
+                    ejecutado: false,
+                    errorMsg: ''
+                }));
+                setFixRows(rows);
+                setFixMessage({ type: 'warning', text: `⚠️ ${rows.length} registro(s) con agenda rota encontrados. Usa Fix individual o Reparar Todos.` });
+            } catch (err) {
+                setFixMessage({ type: 'error', text: 'Error en consulta: ' + err.message });
+            }
+            setFixConsultando(false);
+        };
+
+        // Construir UPDATE de agendamiento para Fix
+        const fixBuildUpdate = (row, agenteIdent, agenteTv) => {
+            const rappel = getRappel();
+            const fecha = getDate();
+            return `UPDATE ${fixCampana.Result} SET PRIORITE=0, VERSOP=${agenteIdent}, ID_TV=${agenteIdent}, TV='${agenteTv}', RAPPEL='${rappel}', STATUS=94, LIB_STATUS='VOLVER A LLAMAR', DETAIL=1, mixup=1, tzbegin=0900, tzend=2000, DATE='${fecha}' WHERE INDICE=${row.indice};`;
+        };
+
+        // Resolver agente (desde catálogo o desde el registro mismo)
+        const fixResolverAgente = (identStr) => {
+            const agenteObj = agentes.find(a => String(a.Ident) === String(identStr));
+            if (agenteObj) return { ident: agenteObj.Ident, tv: agenteObj.TV };
+            // Si no está en catálogo usar TV del registro original
+            const row = fixRows.find(r => String(r.id_tv) === String(identStr));
+            return { ident: identStr, tv: row ? row.tv : identStr };
+        };
+
+        // Fix individual
+        const fixIndividual = async (rowId) => {
+            const row = fixRows.find(r => r.id === rowId);
+            if (!row) return;
+            const { ident, tv } = fixResolverAgente(row.agenteSeleccionado);
+            const sql = fixBuildUpdate(row, ident, tv);
+            if (modoEjecucion === 'manual') {
+                const header = fixSqlAcumulado ? '' : `-- ============================================================\n-- FIX AGENDA - ${fixCampana.NombreCampana} | ${fixMesCarga}\n-- RAPPEL: ${getRappel()}\n-- ============================================================\n\n`;
+                setFixSqlAcumulado(prev => prev + header + sql + '\n');
+                addToast(`Query de Fix agregada para INDICE ${row.indice}.`, 'success');
+            } else {
+                if (!window.nexusAPI) { addToast('Sin conexión SQL activa.', 'error'); return; }
+                setFixRows(prev => prev.map(r => r.id === rowId ? { ...r, ejecutado: false, errorMsg: '' } : r));
+                try {
+                    const res = await window.nexusAPI.executeSQL(sql);
+                    if (!res.success) throw new Error(res.error);
+                    setFixRows(prev => prev.map(r => r.id === rowId ? { ...r, ejecutado: true, errorMsg: '' } : r));
+                    addToast(`✅ Fix ejecutado para INDICE ${row.indice}.`, 'success');
+                } catch (err) {
+                    setFixRows(prev => prev.map(r => r.id === rowId ? { ...r, ejecutado: false, errorMsg: err.message } : r));
+                    addToast(`Error en INDICE ${row.indice}: ${err.message}`, 'error');
+                }
+            }
+        };
+
+        // Reparar Todos
+        const fixRepararTodos = async () => {
+            if (fixRows.length === 0) return;
+            if (modoEjecucion === 'manual') {
+                let sql = `-- ============================================================\n-- FIX AGENDA MASIVO - ${fixCampana.NombreCampana} | ${fixMesCarga}\n-- RAPPEL: ${getRappel()} | ${fixRows.length} registros\n-- ============================================================\n\n`;
+                fixRows.forEach(row => {
+                    const { ident, tv } = fixResolverAgente(row.agenteSeleccionado);
+                    sql += fixBuildUpdate(row, ident, tv) + '\n';
+                });
+                setFixSqlAcumulado(sql);
+                addToast(`Query generada para ${fixRows.length} registros.`, 'success');
+            } else {
+                if (!window.nexusAPI) { addToast('Sin conexión SQL activa.', 'error'); return; }
+                setFixProcesando(true);
+                let ok = 0, err = 0;
+                for (const row of fixRows) {
+                    const { ident, tv } = fixResolverAgente(row.agenteSeleccionado);
+                    const sql = fixBuildUpdate(row, ident, tv);
+                    try {
+                        const res = await window.nexusAPI.executeSQL(sql);
+                        if (!res.success) throw new Error(res.error);
+                        setFixRows(prev => prev.map(r => r.id === row.id ? { ...r, ejecutado: true, errorMsg: '' } : r));
+                        ok++;
+                    } catch (e) {
+                        setFixRows(prev => prev.map(r => r.id === row.id ? { ...r, ejecutado: false, errorMsg: e.message } : r));
+                        err++;
+                    }
+                }
+                setFixProcesando(false);
+                setFixMessage({ type: err > 0 ? 'warning' : 'success', text: `Reparación masiva: ${ok} exitosos${err > 0 ? `, ${err} con error` : ''}.` });
+            }
+        };
+
+        // =====================================================================
+        // CONSULTAR REGISTRO — funciones
+        // =====================================================================
+
+        const getMesCursoConsulta = () => {
+            const d = new Date();
+            const meses = ['ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO', 'JULIO', 'AGOSTO', 'SEPTIEMBRE', 'OCTUBRE', 'NOVIEMBRE', 'DICIEMBRE'];
+            return `${meses[d.getMonth()]}_${String(d.getFullYear()).slice(-2)}`;
+        };
+
+        // Mapeo silencioso al seleccionar campaña en Consulta
+        const csSeleccionarCampana = async (campResult) => {
+            const camp = campanas.find(c => c.Result === campResult);
+            if (!camp) return;
+            setCsCampana(camp);
+            setCsCampoMes('');
+            setCsCampoIdent('');
+            setCsResultado(null);
+            setCsExcluido(false);
+            setCsHabilitar(false);
+            setCsSqlResult('');
+            setCsMessage({ type: '', text: '' });
+            if (!window.nexusAPI) return;
+            try {
+                const qMap = `SELECT TOP 1 * FROM ${camp.TablaCliente} a JOIN ${camp.Result} b ON a.INDICE = b.INDICE`;
+                const rMap = await window.nexusAPI.executeSQL(qMap);
+                if (rMap.success && rMap.data && rMap.data.length > 0) {
+                    const cols = Object.keys(rMap.data[0]);
+                    // Campo mes
+                    const mc = cols.find(c => c.toUpperCase() === 'MESCARGA') ? 'MESCARGA'
+                        : cols.find(c => c.toUpperCase() === 'MES_CARGA') ? 'MES_CARGA' : '';
+                    setCsCampoMes(mc);
+                    // Identificador: ROW_ID > RUT > RUT_CLIENTE
+                    const ident = cols.find(c => c.toUpperCase() === 'ROW_ID')
+                        || cols.find(c => c.toUpperCase() === 'RUT')
+                        || cols.find(c => c.toUpperCase() === 'RUT_CLIENTE')
+                        || '';
+                    setCsCampoIdent(ident);
+                }
+            } catch (e) { /* silencioso */ }
+        };
+
+        // Ejecutar consulta con fallback a excluido
+        const csConsultar = async () => {
+            if (!csCampana) { setCsMessage({ type: 'warning', text: 'Selecciona una campaña.' }); return; }
+            if (!csValorIdent.trim()) { setCsMessage({ type: 'warning', text: 'Ingresa el valor del identificador.' }); return; }
+            if (!window.nexusAPI) { setCsMessage({ type: 'error', text: 'Sin conexión SQL activa.' }); return; }
+            const campoMes = csCampoMes || 'MESCARGA';
+            const campoIdent = csCampoIdent || 'ROW_ID';
+            const isNum = !isNaN(csValorIdent.trim());
+            const valorFmt = isNum ? csValorIdent.trim() : `'${csValorIdent.trim()}'`;
+
+            setCsConsultando(true);
+            setCsResultado(null);
+            setCsExcluido(false);
+            setCsHabilitar(false);
+            setCsSqlResult('');
+            setCsMessage({ type: '', text: '' });
+
+            const buildQuery = (mesVal) => `SELECT a.INDICE, a.${campoIdent} AS IDENTIFICADOR, b.STATUS, b.LIB_STATUS, b.DETAIL, b.LIB_DETAIL, b.ID_TV, b.TV, a.BASE, a.${campoMes} AS MESdeCarga FROM ${csCampana.TablaCliente} a JOIN ${csCampana.Result} b ON a.INDICE = b.INDICE WHERE a.${campoMes}='${mesVal}' AND a.${campoIdent}=${valorFmt}`;
+
+            try {
+                // Intento 1: mes normal
+                const q1 = buildQuery(csMesCarga);
+                const r1 = await window.nexusAPI.executeSQL(q1);
+                if (r1.success && r1.data && r1.data.length > 0) {
+                    setCsResultado(r1.data[0]);
+                    setCsExcluido(false);
+                    setCsAgenteSeleccionado(String(r1.data[0].ID_TV || ''));
+                    setCsSqlResult(q1);
+                    setCsMessage({ type: 'success', text: `✅ Registro encontrado en mes ${csMesCarga}.` });
+                    setCsConsultando(false);
+                    return;
+                }
+                // Intento 2: mes excluido
+                const mesExcl = `${csMesCarga}_EXCL`;
+                const q2 = buildQuery(mesExcl);
+                const r2 = await window.nexusAPI.executeSQL(q2);
+                if (r2.success && r2.data && r2.data.length > 0) {
+                    setCsResultado(r2.data[0]);
+                    setCsExcluido(true);
+                    setCsAgenteSeleccionado(String(r2.data[0].ID_TV || ''));
+                    setCsSqlResult(q2);
+                    setCsMessage({ type: 'warning', text: `⚠️ Registro encontrado en mes EXCLUIDO (${mesExcl}). Verifica los motivos antes de habilitar.` });
+                } else {
+                    setCsMessage({ type: 'error', text: `No se encontró el registro con ${campoIdent}=${csValorIdent.trim()} en mes ${csMesCarga} ni en ${mesExcl}.` });
+                }
+            } catch (err) {
+                setCsMessage({ type: 'error', text: 'Error en consulta: ' + err.message });
+            }
+            setCsConsultando(false);
+        };
+
+        // Agendar o Habilitar+Agendar desde Consulta
+        const csEjecutarAgendamiento = async () => {
+            if (!csResultado || !csCampana) return;
+            if (!window.nexusAPI) { setCsMessage({ type: 'error', text: 'Sin conexión SQL activa.' }); return; }
+            const campoMes = csCampoMes || 'MESCARGA';
+            const agenteObj = agentes.find(a => String(a.Ident) === String(csAgenteSeleccionado));
+            const ident = agenteObj ? agenteObj.Ident : csAgenteSeleccionado;
+            const tv = agenteObj ? agenteObj.TV : (csResultado.TV || csAgenteSeleccionado);
+            const rappel = getRappel();
+            const fecha = getDate();
+            const sqlAgendar = `UPDATE ${csCampana.Result} SET PRIORITE=0, VERSOP=${ident}, ID_TV=${ident}, TV='${tv}', RAPPEL='${rappel}', STATUS=94, LIB_STATUS='VOLVER A LLAMAR', DETAIL=1, mixup=1, tzbegin=0900, tzend=2000, DATE='${fecha}' WHERE INDICE=${csResultado.INDICE};`;
+            const sqlHabilitar = csExcluido ? `UPDATE ${csCampana.TablaCliente} SET ${campoMes}='${csMesCarga}' WHERE INDICE=${csResultado.INDICE};\n` : '';
+            const sqlFinal = sqlHabilitar + sqlAgendar;
+
+            if (modoEjecucion === 'manual') {
+                const header = `-- ============================================================\n-- CONSULTA - ${csExcluido ? 'HABILITAR + ' : ''}AGENDAR REGISTRO\n-- Campaña: ${csCampana.NombreCampana} | INDICE: ${csResultado.INDICE}\n-- ============================================================\n\n`;
+                setCsSqlResult(header + sqlFinal);
+                setCsMessage({ type: 'success', text: 'Query generada. Copia y ejecuta en el motor de Vocalcom.' });
+            } else {
+                setCsEjecutando(true);
+                try {
+                    if (csExcluido) {
+                        const rH = await window.nexusAPI.executeSQL(`UPDATE ${csCampana.TablaCliente} SET ${campoMes}='${csMesCarga}' WHERE INDICE=${csResultado.INDICE}`);
+                        if (!rH.success) throw new Error('Error al habilitar: ' + rH.error);
+                    }
+                    const rA = await window.nexusAPI.executeSQL(sqlAgendar);
+                    if (!rA.success) throw new Error('Error al agendar: ' + rA.error);
+                    setCsMessage({ type: 'success', text: `✅ ${csExcluido ? 'Registro incluido y agendado' : 'Agendamiento ejecutado'} correctamente para INDICE ${csResultado.INDICE}.` });
+                    setCsSqlResult(sqlFinal);
+                } catch (err) {
+                    setCsMessage({ type: 'error', text: err.message });
+                }
+                setCsEjecutando(false);
+            }
+        };
+
+        return (
+            <div className="flex flex-col gap-5 p-1">
+
+                {/* ENCABEZADO */}
+                <div className="bg-indigo-900 rounded-lg p-4 text-white">
+                    <h3 className="text-lg font-bold flex items-center gap-2"><Icon name="calendar" size={20} /> Agendamiento Vocalcom</h3>
+                    <p className="text-indigo-200 text-xs mt-1">Genera o ejecuta UPDATEs de agendamiento masivo en el CRM Vocalcom.</p>
+                </div>
+
+                {/* FILA 1: CONFIGURACIÓN */}
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div className="border border-gray-200 bg-gray-50 rounded-lg p-4 flex flex-col gap-2">
+                        <label className="text-xs font-bold text-gray-600 uppercase">Fecha Agenda</label>
+                        <input type="date" className="border border-gray-300 rounded p-2 text-sm outline-none focus:border-indigo-500 bg-white" value={fechaAgenda} onChange={e => setFechaAgenda(e.target.value)} />
+                        <p className="text-xs text-gray-400">RAPPEL: <strong>{getRappel()}</strong></p>
+                    </div>
+                    <div className="border border-gray-200 bg-gray-50 rounded-lg p-4 flex flex-col gap-2">
+                        <label className="text-xs font-bold text-gray-600 uppercase">Hora (hhmm)</label>
+                        <input type="text" maxLength="4" className="border border-gray-300 rounded p-2 text-sm outline-none focus:border-indigo-500 bg-white font-mono" value={horaAgenda} onChange={e => setHoraAgenda(e.target.value.replace(/\D/g, ''))} placeholder="2300" />
+                        <p className="text-xs text-gray-400">Ej: 0900, 1430, 2300</p>
+                    </div>
+                    <div className="border border-gray-200 bg-gray-50 rounded-lg p-4 flex flex-col gap-2">
+                        <label className="text-xs font-bold text-gray-600 uppercase">Modo Ejecución</label>
+                        <div className="flex flex-col gap-2 mt-1">
+                            <label className={`flex items-center gap-2 p-2 rounded cursor-pointer border-2 transition-colors text-sm ${modoEjecucion === 'manual' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 bg-white'}`}>
+                                <input type="radio" name="modoExec" value="manual" checked={modoEjecucion === 'manual'} onChange={() => setModoEjecucion('manual')} />
+                                <span className="font-bold">📋 Generar Query</span>
+                            </label>
+                            <label className={`flex items-center gap-2 p-2 rounded cursor-pointer border-2 transition-colors text-sm ${modoEjecucion === 'automatico' ? 'border-green-500 bg-green-50' : 'border-gray-200 bg-white'}`}>
+                                <input type="radio" name="modoExec" value="automatico" checked={modoEjecucion === 'automatico'} onChange={() => setModoEjecucion('automatico')} />
+                                <span className="font-bold">⚡ Ejecutar Auto</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div className="border border-indigo-200 bg-indigo-50 rounded-lg p-4 flex flex-col gap-2 justify-between">
+                        <div>
+                            <label className="text-xs font-bold text-indigo-700 uppercase">Catálogos SQL</label>
+                            <p className="text-xs text-indigo-500 mt-1">Carga campañas y agentes desde la conexión activa.</p>
+                        </div>
+                        <button type="button" onClick={cargarCatalogos} disabled={cargandoCatalogos} className="w-full bg-indigo-700 hover:bg-indigo-800 disabled:bg-gray-400 text-white font-bold py-2 rounded text-sm flex items-center justify-center gap-2">
+                            {cargandoCatalogos ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : <Icon name="refresh-cw" size={14} />}
+                            {campanas.length > 0 ? `Recargar (${campanas.length} camp.)` : 'Cargar Catálogos'}
+                        </button>
+                    </div>
+                </div>
+
+                {/* MENSAJE */}
+                {panelMessage.text && (
+                    <div className={`rounded-lg p-3 text-sm font-medium ${panelMessage.type === 'success' ? 'bg-green-50 border border-green-300 text-green-800' : panelMessage.type === 'error' ? 'bg-red-50 border border-red-300 text-red-800' : 'bg-amber-50 border border-amber-300 text-amber-800'}`}>
+                        {panelMessage.text}
+                    </div>
+                )}
+
+                {/* MODO DE ENTRADA */}
+                <div className="border border-gray-200 rounded-lg overflow-hidden">
+                    <div className="bg-gray-100 px-4 py-2 flex items-center justify-between">
+                        <span className="text-sm font-bold text-gray-700">Registros a Agendar</span>
+                        <div style={{ display: 'flex', gap: '6px' }}>
+                            <button type="button" onClick={() => setModoEntrada('manual')} style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.75rem', border: '2px solid #6366f1', background: modoEntrada === 'manual' ? '#6366f1' : 'white', color: modoEntrada === 'manual' ? 'white' : '#6366f1', cursor: 'pointer' }}>✏️ Manual</button>
+                            <button type="button" onClick={() => setModoEntrada('texto')} style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.75rem', border: '2px solid #0891b2', background: modoEntrada === 'texto' ? '#0891b2' : 'white', color: modoEntrada === 'texto' ? 'white' : '#0891b2', cursor: 'pointer' }}>📋 Pegar</button>
+                            <button type="button" onClick={() => setModoEntrada('archivo')} style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.75rem', border: '2px solid #059669', background: modoEntrada === 'archivo' ? '#059669' : 'white', color: modoEntrada === 'archivo' ? 'white' : '#059669', cursor: 'pointer' }}>📂 Archivo</button>
+                            <button type="button" onClick={() => setModoEntrada('fix')} style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.75rem', border: '2px solid #dc2626', background: modoEntrada === 'fix' ? '#dc2626' : 'white', color: modoEntrada === 'fix' ? 'white' : '#dc2626', cursor: 'pointer' }}>🔧 Fix Agenda</button>
+                            <button type="button" onClick={() => setModoEntrada('consulta')} style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.75rem', border: '2px solid #7c3aed', background: modoEntrada === 'consulta' ? '#7c3aed' : 'white', color: modoEntrada === 'consulta' ? 'white' : '#7c3aed', cursor: 'pointer' }}>🔍 Consultar</button>
+                        </div>
+                    </div>
+
+                    {/* MODO PEGAR TEXTO */}
+                    {modoEntrada === 'texto' && stagingRows.length === 0 && (
+                        <div className="p-4 flex flex-col gap-3">
+                            <p className="text-xs text-gray-500">Pega índices con formato: <strong>Índice , Agente(código)</strong> — separados por coma, tab o punto y coma. Una fila por línea. La campaña se asigna después en la grilla.</p>
+                            <textarea style={{ width: '100%', minHeight: '120px', padding: '0.75rem', border: '2px solid #0891b2', borderRadius: '8px', fontFamily: 'monospace', fontSize: '0.8rem', resize: 'vertical', boxSizing: 'border-box' }} value={textoLote} onChange={e => setTextoLote(e.target.value)} placeholder={`123456,1224\n789012,1225\n345678`} />
+                            <button type="button" onClick={parsearLote} className="bg-cyan-700 hover:bg-cyan-800 text-white font-bold py-2 px-4 rounded text-sm self-start">Cargar a Grilla →</button>
+                        </div>
+                    )}
+
+                    {/* MODO ARCHIVO */}
+                    {modoEntrada === 'archivo' && stagingRows.length === 0 && (
+                        <div className="p-4 flex flex-col gap-3">
+                            <p className="text-xs text-gray-500">Excel o CSV con columnas: <strong>Índice</strong> (obligatorio) y <strong>Agente</strong> (opcional). La campaña se asigna después en la grilla.</p>
+                            <label className="border-2 border-dashed border-green-300 bg-green-50 rounded-lg p-6 text-center cursor-pointer hover:bg-green-100 transition-colors">
+                                <input type="file" accept=".xlsx,.xls,.csv,.txt" className="hidden" onChange={parsearArchivo} />
+                                <Icon name="upload" size={24} className="mx-auto text-green-500 mb-2" />
+                                <p className="text-sm font-bold text-green-700">Clic para seleccionar archivo</p>
+                            </label>
+                        </div>
+                    )}
+
+                    {/* STAGING GRID (modos Pegar y Archivo, una vez cargados) */}
+                    {(modoEntrada === 'texto' || modoEntrada === 'archivo') && stagingRows.length > 0 && (
+                        <div className="flex flex-col gap-3 p-3">
+
+                            {/* TOOLBAR MASIVO */}
+                            <div className="bg-indigo-950 rounded-lg p-3 flex flex-col gap-3">
+                                <div className="flex items-center justify-between">
+                                    <span className="text-white font-bold text-sm flex items-center gap-2">
+                                        <Icon name="layers" size={15} /> Panel de Asignación Masiva
+                                        {selectedIds.size > 0 && <span className="bg-indigo-400 text-white text-xs font-black px-2 py-0.5 rounded-full">{selectedIds.size} sel.</span>}
+                                    </span>
+                                    <button type="button" onClick={() => { setStagingRows([]); setSelectedIds(new Set()); setDetectedColumns([]); setActiveExtraCols(new Set()); }} className="text-xs text-red-300 hover:text-red-100 font-bold">✕ Limpiar todo</button>
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                                    <select className="border border-indigo-400 bg-indigo-900 text-white rounded p-2 text-sm outline-none focus:border-indigo-300" value={bulkCampaign} onChange={e => setBulkCampaign(e.target.value)}>
+                                        <option value="">-- Campaña a asignar --</option>
+                                        {campanas.map(c => <option key={c.Result} value={c.Result}>{c.NombreCampana}</option>)}
+                                    </select>
+                                    <select className="border border-indigo-400 bg-indigo-900 text-white rounded p-2 text-sm outline-none focus:border-indigo-300" value={bulkAgent} onChange={e => setBulkAgent(e.target.value)}>
+                                        <option value="">-- Agente (opcional) --</option>
+                                        {agentes.map(a => { const sitio = a.Codigo_CallFile ? a.Codigo_CallFile.split('-')[0] : ''; return <option key={a.Codigo_CallFile} value={a.Ident}>[{sitio}] {a.Ident} — {a.TV}</option>; })}
+                                    </select>
+                                    <button type="button" onClick={aplicarAsignacionMasiva} disabled={selectedIds.size === 0 || !bulkCampaign} className="bg-indigo-500 hover:bg-indigo-400 disabled:bg-indigo-800 disabled:text-indigo-500 text-white font-bold py-2 px-4 rounded text-sm transition-colors">
+                                        ⚡ Aplicar a {selectedIds.size > 0 ? selectedIds.size : 'seleccionadas'}
+                                    </button>
+                                </div>
+
+                                {/* FILTROS ADICIONALES COLAPSABLE */}
+                                <div>
+                                    <button type="button" onClick={() => setExtraWhereOpen(p => !p)} className="text-indigo-300 hover:text-white text-xs font-bold flex items-center gap-1 transition-colors">
+                                        {extraWhereOpen ? '▾' : '▸'} {extraWhereOpen ? 'Ocultar' : '[+]'} Filtros y columnas adicionales
+                                        {(extraWhere.trim() || activeExtraCols.size > 0) && (
+                                            <span className="bg-amber-400 text-amber-900 text-xs font-black px-1.5 py-0.5 rounded-full ml-1">
+                                                {(extraWhere.trim() ? 1 : 0) + activeExtraCols.size}
+                                            </span>
+                                        )}
+                                    </button>
+                                    {extraWhereOpen && (
+                                        <div className="mt-2 flex flex-col gap-3">
+
+                                            {/* FILA: AND adicional */}
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-indigo-300 text-xs font-bold whitespace-nowrap">AND filtro:</span>
+                                                <input
+                                                    type="text"
+                                                    className="flex-1 border border-indigo-400 bg-indigo-900 text-white rounded p-1.5 text-xs outline-none focus:border-amber-400 font-mono"
+                                                    placeholder="MES_CARG='Marzo_25'"
+                                                    value={extraWhere}
+                                                    onChange={e => setExtraWhere(e.target.value)}
+                                                />
+                                                {extraWhere.trim() && (
+                                                    <button type="button" onClick={() => setExtraWhere('')} className="text-red-300 hover:text-red-100 text-xs font-bold px-1">✕</button>
+                                                )}
+                                            </div>
+
+                                            {/* FILA: Columnas extra visibles */}
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                                <span className="text-indigo-300 text-xs font-bold whitespace-nowrap">Columnas visibles:</span>
+                                                {[...activeExtraCols].map(col => (
+                                                    <span key={col} className="flex items-center gap-1 bg-indigo-700 text-white text-xs px-2 py-0.5 rounded-full">
+                                                        {col}
+                                                        <button type="button" onClick={() => setActiveExtraCols(prev => { const next = new Set(prev); next.delete(col); return next; })} className="text-indigo-300 hover:text-white font-bold ml-0.5">✕</button>
+                                                    </span>
+                                                ))}
+                                                {/* DROPDOWN + columna */}
+                                                {detectedColumns.length > 0 ? (
+                                                    <select
+                                                        className="border border-indigo-400 bg-indigo-800 text-white rounded px-2 py-0.5 text-xs outline-none focus:border-amber-400 cursor-pointer"
+                                                        value=""
+                                                        onChange={e => {
+                                                            if (!e.target.value) return;
+                                                            setActiveExtraCols(prev => new Set([...prev, e.target.value]));
+                                                            e.target.value = '';
+                                                        }}
+                                                    >
+                                                        <option value="">+ Agregar columna</option>
+                                                        {detectedColumns
+                                                            .filter(c => !activeExtraCols.has(c))
+                                                            .map(c => <option key={c} value={c}>{c}</option>)
+                                                        }
+                                                    </select>
+                                                ) : (
+                                                    <span className="text-indigo-500 text-xs italic">Consulta un registro primero para ver columnas disponibles</span>
+                                                )}
+                                            </div>
+
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* BARRA DE PROGRESO */}
+                            {stagingProgress.running && (
+                                <div className="flex flex-col gap-1">
+                                    <div className="flex justify-between text-xs text-gray-500 font-bold">
+                                        <span>Consultando estados...</span>
+                                        <span>{stagingProgress.current} / {stagingProgress.total}</span>
+                                    </div>
+                                    <div className="w-full bg-gray-200 rounded-full h-2">
+                                        <div className="bg-indigo-600 h-2 rounded-full transition-all" style={{ width: `${(stagingProgress.current / stagingProgress.total) * 100}%` }}></div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* DATA GRID */}
+                            <div className="overflow-x-auto rounded-lg border border-gray-200 shadow-sm">
+                                <table className="w-full text-sm border-collapse">
+                                    <thead>
+                                        <tr className="bg-gray-100 text-gray-600 uppercase text-xs">
+                                            <th className="p-2 text-center w-8">
+                                                <input type="checkbox" checked={stagingRows.length > 0 && selectedIds.size === stagingRows.length} onChange={toggleSelectAll} />
+                                            </th>
+                                            <th className="p-2 text-left w-24">Índice</th>
+                                            <th className="p-2 text-left">Campaña</th>
+                                            <th className="p-2 text-left w-40">Agente</th>
+                                            <th className="p-2 text-center w-28">Acciones</th>
+                                            <th className="p-2 text-left">Vista Previa</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {stagingRows.map((fila, idx) => (
+                                            <tr key={fila.id} className={`border-t border-gray-100 transition-colors ${selectedIds.has(fila.id) ? 'bg-indigo-50' : idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-indigo-50`}>
+                                                <td className="p-2 text-center">
+                                                    <input type="checkbox" checked={selectedIds.has(fila.id)} onChange={() => toggleSelect(fila.id)} />
+                                                </td>
+                                                <td className="p-2 font-mono font-bold text-gray-800">{fila.indice || <span className="text-gray-300 italic">—</span>}</td>
+                                                <td className="p-2">
+                                                    <select
+                                                        className={`border rounded p-1 text-xs outline-none w-full ${fila.campana ? 'border-indigo-300 bg-indigo-50 text-indigo-900 font-bold focus:border-indigo-500' : 'border-amber-300 bg-amber-50 text-amber-700 font-bold focus:border-amber-500'}`}
+                                                        value={fila.campana}
+                                                        onChange={e => {
+                                                            const selected = campanas.find(c => c.Result === e.target.value);
+                                                            setStagingRows(prev => prev.map(r => r.id === fila.id
+                                                                ? { ...r, campana: selected ? selected.Result : '', tablaCliente: selected ? selected.TablaCliente : '', statusData: null }
+                                                                : r
+                                                            ));
+                                                        }}
+                                                    >
+                                                        <option value="">— Sin campaña —</option>
+                                                        {campanas.map(c => <option key={c.Result} value={c.Result}>{c.NombreCampana}</option>)}
+                                                    </select>
+                                                </td>
+                                                <td className="p-2">
+                                                    <select className="border border-gray-200 rounded p-1 text-xs outline-none focus:border-indigo-400 bg-white w-full" value={fila.agente} onChange={e => setStagingRows(prev => prev.map(r => r.id === fila.id ? { ...r, agente: e.target.value, statusData: null } : r))}>
+                                                        <option value="">— Sin agente —</option>
+                                                        {agentes.map(a => { const sitio = a.Codigo_CallFile ? a.Codigo_CallFile.split('-')[0] : ''; return <option key={a.Codigo_CallFile} value={a.Ident}>[{sitio}] {a.Ident} — {a.TV}</option>; })}
+                                                    </select>
+                                                </td>
+                                                <td className="p-2 text-center">
+                                                    <div className="flex items-center justify-center gap-1">
+                                                        <button type="button" onClick={() => {
+                                                            if (!fila.indice || !fila.campana) { addToast('Asigna campaña e índice primero.', 'warning'); return; }
+                                                            if (!window.nexusAPI) { addToast('Sin conexión SQL activa.', 'error'); return; }
+                                                            setStagingRows(prev => prev.map(r => r.id === fila.id ? { ...r, loadingStatus: true } : r));
+                                                            const whereExtra = extraWhere.trim() ? ` AND ${extraWhere.trim()}` : '';
+                                                            // SELECT * silencioso para mapear columnas, luego query limpia
+                                                            const qMap = `SELECT * FROM ${fila.tablaCliente} a JOIN ${fila.campana} b ON a.INDICE = b.INDICE WHERE a.INDICE=${fila.indice}${whereExtra}`;
+                                                            window.nexusAPI.executeSQL(qMap).then(r => {
+                                                                if (r.success && r.data && r.data.length > 0 && detectedColumns.length === 0) {
+                                                                    setDetectedColumns(Object.keys(r.data[0]));
+                                                                }
+                                                                // Query limpia con columnas base + extras activas, sin alias
+                                                                const colBase = `a.INDICE, STATUS, DETAIL, LIB_STATUS, LIB_DETAIL, ID_TV, TV, BASE, DATE as ULTIMA_GESTION, NIVABS as INTENTOS, substring(RAPPEL,2,8) as FECHA_AGENDA`;
+                                                                const colExtra = activeExtraCols.size > 0 ? ', ' + [...activeExtraCols].join(', ') : '';
+                                                                const qFinal = `SELECT ${colBase}${colExtra} FROM ${fila.tablaCliente} a JOIN ${fila.campana} b ON a.INDICE = b.INDICE WHERE a.INDICE=${fila.indice}${whereExtra}`;
+                                                                return window.nexusAPI.executeSQL(qFinal);
+                                                            }).then(r => {
+                                                                if (!r) return;
+                                                                const resultado = r.success && r.data && r.data.length > 0 ? r.data[0] : { error: r.error || 'No encontrado' };
+                                                                setStagingRows(prev => prev.map(rf => rf.id === fila.id ? { ...rf, statusData: resultado, loadingStatus: false } : rf));
+                                                            }).catch(err => setStagingRows(prev => prev.map(rf => rf.id === fila.id ? { ...rf, statusData: { error: err.message }, loadingStatus: false } : rf)));
+                                                        }} disabled={fila.loadingStatus} className="px-2 py-1 bg-blue-100 text-blue-700 font-bold rounded hover:bg-blue-200 text-xs disabled:opacity-50 flex items-center gap-1">
+                                                            {fila.loadingStatus ? <div className="w-3 h-3 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div> : <Icon name="search" size={12} />}
+                                                            Ver
+                                                        </button>
+                                                        <button type="button" onClick={() => eliminarStagingFila(fila.id)} className="px-2 py-1 bg-red-50 text-red-400 hover:text-red-600 rounded text-xs">✕</button>
+                                                    </div>
+                                                </td>
+                                                <td className="p-2">
+                                                    {fila.statusData ? (
+                                                        fila.statusData.error
+                                                            ? <span className="text-red-500 text-xs font-bold">{fila.statusData.error}</span>
+                                                            : <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-700">
+                                                                <span><span className="text-gray-400">STATUS:</span> <strong className={fila.statusData.STATUS == 94 ? 'text-indigo-600' : ''}>{fila.statusData.STATUS}</strong></span>
+                                                                <span><span className="text-gray-400">TV:</span> <strong>{fila.statusData.TV || '—'}</strong></span>
+                                                                <span><span className="text-gray-400">DETAIL:</span> <strong>{fila.statusData.DETAIL}</strong></span>
+                                                                <span><span className="text-gray-400">BASE:</span> <strong>{fila.statusData.BASE || '—'}</strong></span>
+                                                                <span><span className="text-gray-400">AGENDA:</span> <strong className="text-amber-600">{fila.statusData.FECHA_AGENDA || '—'}</strong></span>
+                                                                {[...activeExtraCols].map(col => (
+                                                                    <span key={col}><span className="text-gray-400">{col}:</span> <strong>{fila.statusData[col] ?? '—'}</strong></span>
+                                                                ))}
+                                                            </div>
+                                                    ) : <span className="text-gray-300 text-xs italic">—</span>}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            {/* PIE DE GRILLA */}
+                            <div className="flex items-center justify-between text-xs text-gray-500">
+                                <span>{stagingRows.length} registros · {stagingRows.filter(r => r.campana).length} con campaña · {stagingRows.filter(r => r.statusData && !r.statusData.error).length} consultados</span>
+                                <button type="button" onClick={consultarSeleccionados} disabled={stagingProgress.running || selectedIds.size === 0} className="bg-blue-700 hover:bg-blue-800 disabled:bg-gray-300 text-white font-bold py-1.5 px-4 rounded text-xs flex items-center gap-2 transition-colors">
+                                    {stagingProgress.running ? <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : <Icon name="search" size={12} />}
+                                    Consultar seleccionados ({selectedIds.size})
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* GRILLA MANUAL */}
+                    {modoEntrada === 'manual' && (
+                        <div className="p-4 flex flex-col gap-3">
+                            {/* CABECERA */}
+                            <div className="grid gap-2 text-xs font-bold text-gray-500 uppercase px-1" style={{ gridTemplateColumns: '2fr 1.5fr 90px 70px 28px' }}>
+                                <span>Campaña</span>
+                                <span>Agente</span>
+                                <span>Índice</span>
+                                <span>Estado</span>
+                                <span></span>
+                            </div>
+
+                            {filas.map((fila, index) => (
+                                <div key={fila.id} className="relative flex flex-col gap-3 bg-white p-4 rounded-xl border border-gray-200 shadow-sm transition-all hover:border-indigo-300 mb-3">
+                                    {/* NUMERO & ELIMINAR */}
+                                    <div className="absolute top-3 right-3 flex items-center gap-2">
+                                        <span className="font-bold text-gray-300 text-xs">#{index + 1}</span>
+                                        <button type="button" onClick={() => eliminarFila(fila.id)} className="text-red-400 hover:text-red-600 p-1 rounded hover:bg-red-50 transition-colors" title="Eliminar Fila">
+                                            <Icon name="trash-2" size={16} />
+                                        </button>
+                                    </div>
+
+                                    {/* LÍNEA 1: CAMPANA & AGENTE */}
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pr-12">
+                                        <div className="flex flex-col gap-1">
+                                            <label className="text-xs font-bold text-gray-500 uppercase tracking-wide">Campaña a afectar</label>
+                                            <select className="border border-gray-300 rounded p-2 text-sm outline-none focus:border-indigo-500 bg-gray-50 font-medium" value={fila.campana} onChange={e => {
+                                                const selected = campanas.find(c => c.Result === e.target.value);
+                                                actualizarFila(fila.id, 'campana', selected ? selected.Result : '');
+                                                actualizarFila(fila.id, 'tablaCliente', selected ? selected.TablaCliente : '');
+                                                actualizarFila(fila.id, 'statusData', null);
+                                            }}>
+                                                <option value="">-- Seleccione una Campaña --</option>
+                                                {campanas.map(c => <option key={c.Result} value={c.Result}>{c.NombreCampana} ({c.Result.replace(/^.+?\.+/, '')})</option>)}
+                                            </select>
+                                        </div>
+                                        <div className="flex flex-col gap-1">
+                                            <label className="text-xs font-bold text-gray-500 uppercase tracking-wide">Agente (Opcional)</label>
+                                            <select className="border border-gray-300 rounded p-2 text-sm outline-none focus:border-indigo-500 bg-gray-50" value={fila.agente} onChange={e => actualizarFila(fila.id, 'agente', e.target.value)}>
+                                                <option value="">-- Sin Asignar / Mantener Actual --</option>
+                                                {agentes.map(a => {
+                                                    const sitio = { 1: 'BCH', 2: 'Coopeuch', 3: 'Multisector', 4: 'Vtec', 5: 'Vtec/Cencosud', 6: 'BEME', 8: 'IPSOS' }[a.customerId] || `C${a.customerId}`;
+                                                    return <option key={a.Codigo_CallFile} value={a.Ident}>[{sitio}] {a.Ident} — {a.TV}</option>;
+                                                })}
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    {/* LÍNEA 2: ÍNDICE & BOTÓN VER */}
+                                    <div className="flex flex-row items-end gap-3 mt-1">
+                                        <div className="flex flex-col gap-1">
+                                            <label className="text-xs font-bold text-gray-500 uppercase tracking-wide">Índice del Cliente</label>
+                                            <div className="flex items-center gap-2">
+                                                <input type="text" placeholder="Ej: 123456" className="border border-gray-300 rounded p-2 text-sm outline-none focus:border-indigo-500 w-32 font-bold text-center" value={fila.indice} onChange={e => { actualizarFila(fila.id, 'indice', e.target.value); actualizarFila(fila.id, 'statusData', null); }} />
+                                                <button type="button" onClick={() => verStatus(fila.id)} disabled={fila.loadingStatus || !fila.indice || !fila.campana} className="px-3 py-2 bg-blue-100 text-blue-700 font-bold rounded hover:bg-blue-200 transition-colors flex items-center gap-2 shadow-sm text-sm disabled:opacity-50 disabled:cursor-not-allowed">
+                                                    {fila.loadingStatus ? <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div> : <Icon name="search" size={14} />}
+                                                    Consultar Estado
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* MINI-PANEL LECTURA PREVIA */}
+                                    {fila.statusData && (
+                                        <div className="mt-2 animate-fade-in">
+                                            {fila.statusData.error ? (
+                                                <div className="text-sm text-red-600 bg-red-50 p-3 rounded border border-red-200 flex items-center gap-2 font-medium">
+                                                    <Icon name="alert-circle" size={16} /> {fila.statusData.error}
+                                                </div>
+                                            ) : (
+                                                <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-2 text-slate-800 shadow-inner">
+                                                    <div className="col-span-2 md:col-span-4 border-b border-slate-200 pb-1 mb-1 font-bold text-indigo-800 flex items-center gap-2">
+                                                        <Icon name="info" size={14} /> Vista Previa del Registro Actual
+                                                    </div>
+                                                    <div className="flex flex-col"><span className="text-slate-500 uppercase" style={{ fontSize: '0.65rem' }}>Estado</span><span className={`font-bold ${fila.statusData.STATUS == 94 ? 'text-indigo-600' : ''}`}>{fila.statusData.STATUS} - {fila.statusData.LIB_STATUS}</span></div>
+                                                    <div className="flex flex-col"><span className="text-slate-500 uppercase" style={{ fontSize: '0.65rem' }}>Detalle</span><span className="font-bold">{fila.statusData.DETAIL} - {fila.statusData.LIB_DETAIL || '—'}</span></div>
+                                                    <div className="flex flex-col"><span className="text-slate-500 uppercase" style={{ fontSize: '0.65rem' }}>Agente Actual</span><span className="font-bold">{fila.statusData.TV || '—'} ({fila.statusData.ID_TV || '—'})</span></div>
+                                                    <div className="flex flex-col"><span className="text-slate-500 uppercase" style={{ fontSize: '0.65rem' }}>Intentos</span><span className="font-bold">{fila.statusData.INTENTOS || '0'}</span></div>
+                                                    <div className="flex flex-col"><span className="text-slate-500 uppercase" style={{ fontSize: '0.65rem' }}>Base</span><span className="font-bold">{fila.statusData.BASE || '—'}</span></div>
+                                                    <div className="flex flex-col"><span className="text-slate-500 uppercase" style={{ fontSize: '0.65rem' }}>Última Gestión</span><span className="font-bold">{fila.statusData.ULTIMA_GESTION || '—'}</span></div>
+                                                    <div className="flex flex-col col-span-2"><span className="text-slate-500 uppercase" style={{ fontSize: '0.65rem' }}>Fecha Agenda</span><span className="font-bold text-amber-600">{fila.statusData.FECHA_AGENDA || 'Sin Agendamiento Vigente'}</span></div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            ))}
+
+                            <button type="button" onClick={agregarFila} className="border-2 border-dashed border-indigo-300 text-indigo-600 hover:bg-indigo-50 font-bold py-2 rounded-lg text-sm transition-colors">
+                                + Agregar Fila
+                            </button>
+
+                            {/* PANEL FILTROS MANUAL */}
+                            <div className="border border-gray-200 rounded-lg bg-gray-50 p-3 flex flex-col gap-2">
+                                <button type="button" onClick={() => setExtraWhereOpen(p => !p)} className="text-gray-500 hover:text-indigo-700 text-xs font-bold flex items-center gap-1 transition-colors self-start">
+                                    {extraWhereOpen ? '▾' : '▸'} {extraWhereOpen ? 'Ocultar' : '[+]'} Filtros y columnas para consulta
+                                    {(extraWhere.trim() || activeExtraCols.size > 0) && (
+                                        <span className="bg-indigo-500 text-white text-xs font-black px-1.5 py-0.5 rounded-full ml-1">
+                                            {(extraWhere.trim() ? 1 : 0) + activeExtraCols.size}
+                                        </span>
+                                    )}
+                                </button>
+                                {extraWhereOpen && (
+                                    <div className="flex flex-col gap-3 mt-1">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-gray-500 text-xs font-bold whitespace-nowrap">AND filtro:</span>
+                                            <input
+                                                type="text"
+                                                className="flex-1 border border-gray-300 bg-white text-gray-800 rounded p-1.5 text-xs outline-none focus:border-indigo-400 font-mono"
+                                                placeholder="MES_CARG='Marzo_25'"
+                                                value={extraWhere}
+                                                onChange={e => setExtraWhere(e.target.value)}
+                                            />
+                                            {extraWhere.trim() && (
+                                                <button type="button" onClick={() => setExtraWhere('')} className="text-red-400 hover:text-red-600 text-xs font-bold px-1">✕</button>
+                                            )}
+                                        </div>
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                            <span className="text-gray-500 text-xs font-bold whitespace-nowrap">Columnas visibles:</span>
+                                            {[...activeExtraCols].map(col => (
+                                                <span key={col} className="flex items-center gap-1 bg-indigo-100 text-indigo-800 text-xs px-2 py-0.5 rounded-full">
+                                                    {col}
+                                                    <button type="button" onClick={() => setActiveExtraCols(prev => { const next = new Set(prev); next.delete(col); return next; })} className="text-indigo-400 hover:text-indigo-700 font-bold ml-0.5">✕</button>
+                                                </span>
+                                            ))}
+                                            {detectedColumns.length > 0 ? (
+                                                <select
+                                                    className="border border-gray-300 bg-white text-gray-700 rounded px-2 py-0.5 text-xs outline-none focus:border-indigo-400 cursor-pointer"
+                                                    value=""
+                                                    onChange={e => {
+                                                        if (!e.target.value) return;
+                                                        setActiveExtraCols(prev => new Set([...prev, e.target.value]));
+                                                    }}
+                                                >
+                                                    <option value="">+ Agregar columna</option>
+                                                    {detectedColumns
+                                                        .filter(c => !activeExtraCols.has(c))
+                                                        .map(c => <option key={c} value={c}>{c}</option>)
+                                                    }
+                                                </select>
+                                            ) : (
+                                                <span className="text-gray-400 text-xs italic">Consulta un registro primero para ver columnas disponibles</span>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                {/* ============================================================ */}
+                {/* FIX AGENDA                                                    */}
+                {/* ============================================================ */}
+                {modoEntrada === 'fix' && (
+                    <div className="p-4 flex flex-col gap-4 animate-fade-in">
+
+                        {/* SELECTOR CAMPAÑA + MES */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div className="flex flex-col gap-1">
+                                <label className="text-xs font-bold text-gray-500 uppercase">Campaña a Revisar</label>
+                                <select
+                                    className="border border-red-300 rounded p-2 text-sm outline-none focus:border-red-500 bg-white"
+                                    value={fixCampana ? fixCampana.Result : ''}
+                                    onChange={e => fixSeleccionarCampana(e.target.value)}
+                                    disabled={campanas.length === 0}
+                                >
+                                    <option value="">-- Selecciona una campaña --</option>
+                                    {campanas.map(c => <option key={c.Result} value={c.Result}>{c.NombreCampana}</option>)}
+                                </select>
+                                {fixCampana && (
+                                    <div className="flex flex-wrap gap-2 mt-1">
+                                        {fixCampoMes
+                                            ? <span className="bg-red-50 border border-red-200 text-red-800 text-xs px-2 py-0.5 rounded font-bold">✓ Campo mes: {fixCampoMes}</span>
+                                            : <span className="bg-amber-50 border border-amber-200 text-amber-700 text-xs px-2 py-0.5 rounded font-bold">⚠ Campo mes no detectado</span>
+                                        }
+                                    </div>
+                                )}
+                            </div>
+                            <div className="flex flex-col gap-1">
+                                <label className="text-xs font-bold text-gray-500 uppercase">Mes de Carga</label>
+                                <input
+                                    type="text"
+                                    className="border border-red-300 rounded p-2 text-sm outline-none focus:border-red-500 bg-white font-mono"
+                                    value={fixMesCarga}
+                                    onChange={e => setFixMesCarga(e.target.value)}
+                                    placeholder="Ej: Marzo_26"
+                                />
+                                <p className="text-xs text-gray-400">Auto-calculado. Editable si el proceso es de otro mes.</p>
+                            </div>
+                        </div>
+
+                        {/* BOTÓN BUSCAR */}
+                        <button
+                            type="button"
+                            onClick={fixBuscarRegistros}
+                            disabled={fixConsultando || !fixCampana}
+                            className="w-full bg-red-700 hover:bg-red-800 disabled:bg-gray-400 text-white font-bold py-2.5 rounded-lg flex items-center justify-center gap-2 transition-colors"
+                        >
+                            {fixConsultando
+                                ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Buscando...</>
+                                : <><Icon name="search" size={16} /> Buscar Registros con Agenda Rota</>
+                            }
+                        </button>
+
+                        {/* MENSAJE */}
+                        {fixMessage.text && (
+                            <div className={`rounded-lg p-3 text-sm font-medium flex items-start gap-2 ${fixMessage.type === 'error' ? 'bg-red-50 border border-red-300 text-red-800' : fixMessage.type === 'warning' ? 'bg-amber-50 border border-amber-300 text-amber-800' : 'bg-green-50 border border-green-300 text-green-800'}`}>
+                                <Icon name={fixMessage.type === 'error' ? 'alert-triangle' : fixMessage.type === 'warning' ? 'alert-circle' : 'check-circle'} size={16} className="flex-shrink-0 mt-0.5" />
+                                {fixMessage.text}
+                            </div>
+                        )}
+
+                        {/* GRILLA DE REGISTROS ROTOS */}
+                        {fixRows.length > 0 && (
+                            <div className="flex flex-col gap-3">
+                                <div className="flex items-center justify-between">
+                                    <h4 className="font-bold text-red-800 text-sm flex items-center gap-2">
+                                        <Icon name="alert-triangle" size={15} /> {fixRows.length} registro(s) con agenda rota
+                                    </h4>
+                                    <button
+                                        type="button"
+                                        onClick={fixRepararTodos}
+                                        disabled={fixProcesando}
+                                        className="bg-red-700 hover:bg-red-800 disabled:bg-gray-400 text-white font-bold text-xs px-4 py-2 rounded flex items-center gap-1.5 transition-colors shadow-sm"
+                                    >
+                                        {fixProcesando
+                                            ? <><div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Reparando...</>
+                                            : <><Icon name="zap" size={13} /> {modoEjecucion === 'manual' ? 'Generar Query para Todos' : 'Reparar Todos'}</>
+                                        }
+                                    </button>
+                                </div>
+
+                                <div className="overflow-x-auto rounded-lg border border-red-200 shadow-sm">
+                                    <table className="w-full text-sm border-collapse">
+                                        <thead>
+                                            <tr className="bg-red-50 text-red-700 uppercase text-xs">
+                                                <th className="p-2 text-left w-24">INDICE</th>
+                                                <th className="p-2 text-left w-24">ID_TV Actual</th>
+                                                <th className="p-2 text-left">TV Actual</th>
+                                                <th className="p-2 text-left w-48">Agente a Asignar</th>
+                                                <th className="p-2 text-center w-24">Acción</th>
+                                                <th className="p-2 text-center w-24">Estado</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {fixRows.map((row, idx) => (
+                                                <tr key={row.id} className={`border-t border-red-100 ${idx % 2 === 0 ? 'bg-white' : 'bg-red-50'} ${row.ejecutado ? 'opacity-60' : ''}`}>
+                                                    <td className="p-2 font-mono font-bold text-gray-800">{row.indice}</td>
+                                                    <td className="p-2 font-mono text-gray-600">{row.id_tv}</td>
+                                                    <td className="p-2 text-gray-600 text-xs">{row.tv}</td>
+                                                    <td className="p-2">
+                                                        <select
+                                                            className="border border-gray-200 rounded p-1 text-xs outline-none focus:border-red-400 bg-white w-full"
+                                                            value={row.agenteSeleccionado}
+                                                            onChange={e => setFixRows(prev => prev.map(r => r.id === row.id ? { ...r, agenteSeleccionado: e.target.value } : r))}
+                                                        >
+                                                            {!agentes.find(a => String(a.Ident) === String(row.id_tv)) && (
+                                                                <option value={String(row.id_tv)}>[Original] {row.id_tv} — {row.tv}</option>
+                                                            )}
+                                                            {agentes.map(a => {
+                                                                const sitio = a.Codigo_CallFile ? a.Codigo_CallFile.split('-')[0] : '';
+                                                                return <option key={a.Codigo_CallFile} value={a.Ident}>[{sitio}] {a.Ident} — {a.TV}</option>;
+                                                            })}
+                                                        </select>
+                                                    </td>
+                                                    <td className="p-2 text-center">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => fixIndividual(row.id)}
+                                                            disabled={row.ejecutado}
+                                                            className="bg-red-600 hover:bg-red-700 disabled:bg-gray-300 text-white font-bold text-xs px-3 py-1.5 rounded transition-colors"
+                                                        >
+                                                            🔧 Fix
+                                                        </button>
+                                                    </td>
+                                                    <td className="p-2 text-center text-xs font-bold">
+                                                        {row.ejecutado
+                                                            ? <span className="text-green-600">✅ OK</span>
+                                                            : row.errorMsg
+                                                                ? <span className="text-red-600" title={row.errorMsg}>❌ Error</span>
+                                                                : <span className="text-gray-400">—</span>
+                                                        }
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+
+                                {/* CAJA SQL ACUMULADA (modo manual) */}
+                                {modoEjecucion === 'manual' && fixSqlAcumulado && (
+                                    <div className="flex flex-col gap-2">
+                                        <div className="flex justify-between items-center">
+                                            <h4 className="font-bold text-gray-700 text-sm flex items-center gap-2"><Icon name="code" size={15} /> Queries de Fix Acumuladas</h4>
+                                            <CopyButton text={fixSqlAcumulado} onSuccess={() => addToast('Queries copiadas.', 'success')} label="Copiar Todo" style="dark" />
+                                        </div>
+                                        <pre className="bg-gray-900 text-green-300 text-xs p-4 rounded-lg overflow-x-auto whitespace-pre-wrap font-mono max-h-52 overflow-y-auto">{fixSqlAcumulado}</pre>
+                                        <div className="bg-amber-50 border border-amber-400 rounded p-3 text-xs text-amber-800">
+                                            <strong>⚠️ Recuerda:</strong> Ejecuta estas queries en el motor de base de datos de Vocalcom para que los agentes puedan ver su agenda correctamente.
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* ============================================================ */}
+                {/* CONSULTAR REGISTRO                                            */}
+                {/* ============================================================ */}
+                {modoEntrada === 'consulta' && (
+                    <div className="p-4 flex flex-col gap-4 animate-fade-in">
+
+                        {/* SELECTOR CAMPAÑA + MES */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div className="flex flex-col gap-1">
+                                <label className="text-xs font-bold text-gray-500 uppercase">Campaña</label>
+                                <select
+                                    className="border border-purple-300 rounded p-2 text-sm outline-none focus:border-purple-500 bg-white"
+                                    value={csCampana ? csCampana.Result : ''}
+                                    onChange={e => csSeleccionarCampana(e.target.value)}
+                                    disabled={campanas.length === 0}
+                                >
+                                    <option value="">-- Selecciona una campaña --</option>
+                                    {campanas.map(c => <option key={c.Result} value={c.Result}>{c.NombreCampana}</option>)}
+                                </select>
+                                {csCampana && (
+                                    <div className="flex flex-wrap gap-2 mt-1">
+                                        {csCampoMes
+                                            ? <span className="bg-purple-50 border border-purple-200 text-purple-800 text-xs px-2 py-0.5 rounded font-bold">✓ Campo mes: {csCampoMes}</span>
+                                            : <span className="bg-amber-50 border border-amber-200 text-amber-700 text-xs px-2 py-0.5 rounded font-bold">⚠ Campo mes no detectado</span>
+                                        }
+                                        {csCampoIdent
+                                            ? <span className="bg-blue-50 border border-blue-200 text-blue-800 text-xs px-2 py-0.5 rounded font-bold">✓ Identificador: {csCampoIdent}</span>
+                                            : <span className="bg-amber-50 border border-amber-200 text-amber-700 text-xs px-2 py-0.5 rounded font-bold">⚠ Identificador no detectado</span>
+                                        }
+                                    </div>
+                                )}
+                            </div>
+                            <div className="flex flex-col gap-1">
+                                <label className="text-xs font-bold text-gray-500 uppercase">Mes de Carga</label>
+                                <input
+                                    type="text"
+                                    className="border border-purple-300 rounded p-2 text-sm outline-none focus:border-purple-500 bg-white font-mono"
+                                    value={csMesCarga}
+                                    onChange={e => setCsMesCarga(e.target.value)}
+                                    placeholder="Ej: Marzo_26"
+                                />
+                            </div>
+                        </div>
+
+                        {/* IDENTIFICADOR NO DETECTADO: input manual para nombre de columna */}
+                        {csCampana && !csCampoIdent && (
+                            <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 flex flex-col gap-2 animate-fade-in">
+                                <p className="text-xs font-bold text-amber-800">⚠️ No se detectó columna identificador (ROW_ID / RUT / RUT_CLIENTE). Ingrésala manualmente:</p>
+                                <input
+                                    type="text"
+                                    className="border border-amber-400 rounded p-2 text-sm outline-none focus:border-amber-600 bg-white font-mono w-48"
+                                    placeholder="Ej: ROW_ID"
+                                    value={csCampoIdent}
+                                    onChange={e => setCsCampoIdent(e.target.value.trim())}
+                                />
+                            </div>
+                        )}
+
+                        {/* INPUT VALOR + BOTÓN CONSULTAR */}
+                        {csCampana && (
+                            <div className="flex gap-3 items-end">
+                                <div className="flex flex-col gap-1 flex-1">
+                                    <label className="text-xs font-bold text-gray-500 uppercase">
+                                        Valor {csCampoIdent ? `(${csCampoIdent})` : ''}
+                                    </label>
+                                    <input
+                                        type="text"
+                                        className="border border-purple-300 rounded p-2 text-sm outline-none focus:border-purple-500 bg-white font-mono"
+                                        value={csValorIdent}
+                                        onChange={e => setCsValorIdent(e.target.value)}
+                                        placeholder={`Ingresa el ${csCampoIdent || 'identificador'}...`}
+                                        onKeyDown={e => { if (e.key === 'Enter') csConsultar(); }}
+                                    />
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={csConsultar}
+                                    disabled={csConsultando || !csValorIdent.trim()}
+                                    className="bg-purple-700 hover:bg-purple-800 disabled:bg-gray-400 text-white font-bold py-2 px-5 rounded-lg flex items-center gap-2 transition-colors"
+                                >
+                                    {csConsultando
+                                        ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                                        : <Icon name="search" size={16} />
+                                    }
+                                    Consultar
+                                </button>
+                            </div>
+                        )}
+
+                        {/* MENSAJE */}
+                        {csMessage.text && (
+                            <div className={`rounded-lg p-3 text-sm font-medium flex items-start gap-2 ${csMessage.type === 'error' ? 'bg-red-50 border border-red-300 text-red-800' : csMessage.type === 'warning' ? 'bg-amber-50 border border-amber-300 text-amber-800' : 'bg-green-50 border border-green-300 text-green-800'}`}>
+                                <Icon name={csMessage.type === 'error' ? 'alert-triangle' : csMessage.type === 'warning' ? 'alert-circle' : 'check-circle'} size={16} className="flex-shrink-0 mt-0.5" />
+                                <div>{csMessage.text}</div>
+                            </div>
+                        )}
+
+                        {/* RESULTADO */}
+                        {csResultado && (
+                            <div className={`flex flex-col gap-3 rounded-lg border-2 p-4 animate-fade-in ${csExcluido ? 'border-amber-400 bg-amber-50' : 'border-green-300 bg-green-50'}`}>
+
+                                {/* ALERTA EXCLUIDO */}
+                                {csExcluido && (
+                                    <div className="bg-amber-100 border border-amber-500 rounded-lg p-3 flex items-start gap-2">
+                                        <Icon name="alert-triangle" size={18} className="text-amber-700 flex-shrink-0 mt-0.5" />
+                                        <div>
+                                            <p className="text-sm font-bold text-amber-800">Registro en mes EXCLUIDO ({csMesCarga}_EXCL)</p>
+                                            <p className="text-xs text-amber-700 mt-0.5">Verifica los motivos de exclusión antes de incluir y asignar este registro.</p>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* DATOS DEL REGISTRO */}
+                                <h4 className="font-bold text-gray-700 text-sm flex items-center gap-2">
+                                    <Icon name="file-text" size={15} /> Datos del Registro — INDICE {csResultado.INDICE}
+                                </h4>
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                                    {Object.entries(csResultado).map(([k, v]) => (
+                                        <div key={k} className="bg-white rounded border border-gray-200 p-2">
+                                            <div className="text-xs text-gray-400 font-bold uppercase truncate">{k}</div>
+                                            <div className="text-sm font-mono text-gray-800 truncate" title={String(v ?? '')}>{String(v ?? '—')}</div>
+                                        </div>
+                                    ))}
+                                </div>
+
+                                {/* CHECK HABILITAR (solo si excluido) */}
+                                {csExcluido && (
+                                    <label className="flex items-center gap-3 bg-white border border-amber-300 rounded-lg p-3 cursor-pointer hover:bg-amber-50 transition-colors w-fit">
+                                        <input
+                                            type="checkbox"
+                                            checked={csHabilitar}
+                                            onChange={e => setCsHabilitar(e.target.checked)}
+                                            className="w-4 h-4 accent-amber-600"
+                                        />
+                                        <span className="text-sm font-bold text-amber-800">Habilitar este registro (incluir el registro en el mes de carga)</span>
+                                    </label>
+                                )}
+
+                                {/* SELECTOR AGENTE + BOTÓN AGENDAR */}
+                                {(!csExcluido || csHabilitar) && (
+                                    <div className="flex flex-col gap-2 animate-fade-in">
+                                        <label className="text-xs font-bold text-gray-500 uppercase">Agente para Agendar</label>
+                                        <div className="flex gap-3 items-center flex-wrap">
+                                            <select
+                                                className="border border-indigo-300 rounded p-2 text-sm outline-none focus:border-indigo-500 bg-white flex-1 min-w-48"
+                                                value={csAgenteSeleccionado}
+                                                onChange={e => setCsAgenteSeleccionado(e.target.value)}
+                                            >
+                                                {!agentes.find(a => String(a.Ident) === String(csResultado.ID_TV)) && csResultado.ID_TV && (
+                                                    <option value={String(csResultado.ID_TV)}>[Original] {csResultado.ID_TV} — {csResultado.TV}</option>
+                                                )}
+                                                {agentes.map(a => {
+                                                    const sitio = a.Codigo_CallFile ? a.Codigo_CallFile.split('-')[0] : '';
+                                                    return <option key={a.Codigo_CallFile} value={a.Ident}>[{sitio}] {a.Ident} — {a.TV}</option>;
+                                                })}
+                                            </select>
+                                            {/* Botón Solo Habilitar (solo si excluido) */}
+                                            {csExcluido && (
+                                                <button
+                                                    type="button"
+                                                    onClick={async () => {
+                                                        const campoMes = csCampoMes || 'MESCARGA';
+                                                        const sqlH = `UPDATE ${csCampana.TablaCliente} SET ${campoMes}='${csMesCarga}' WHERE INDICE=${csResultado.INDICE};`;
+                                                        if (modoEjecucion === 'manual') {
+                                                            const header = `-- ============================================================\n-- HABILITAR REGISTRO (sin agendar)\n-- Campaña: ${csCampana.NombreCampana} | INDICE: ${csResultado.INDICE}\n-- ============================================================\n\n`;
+                                                            setCsSqlResult(header + sqlH);
+                                                            setCsMessage({ type: 'success', text: 'Query de habilitación generada. Copia y ejecuta en el motor.' });
+                                                        } else {
+                                                            if (!window.nexusAPI) { setCsMessage({ type: 'error', text: 'Sin conexión SQL activa.' }); return; }
+                                                            setCsEjecutando(true);
+                                                            try {
+                                                                const r = await window.nexusAPI.executeSQL(sqlH);
+                                                                if (!r.success) throw new Error(r.error);
+                                                                setCsMessage({ type: 'success', text: `✅ Registro INDICE ${csResultado.INDICE} incluido en mes ${csMesCarga}. Puedes agendarlo cuando quieras.` });
+                                                                setCsSqlResult(sqlH);
+                                                            } catch (err) {
+                                                                setCsMessage({ type: 'error', text: 'Error al habilitar: ' + err.message });
+                                                            }
+                                                            setCsEjecutando(false);
+                                                        }
+                                                    }}
+                                                    disabled={csEjecutando}
+                                                    className="font-bold py-2 px-4 rounded-lg flex items-center gap-2 transition-colors text-white shadow-sm disabled:bg-gray-400 bg-orange-500 hover:bg-orange-600 text-sm"
+                                                >
+                                                    <Icon name="check-circle" size={15} /> Solo Incluir
+                                                </button>
+                                            )}
+                                            <button
+                                                type="button"
+                                                onClick={csEjecutarAgendamiento}
+                                                disabled={csEjecutando || !csAgenteSeleccionado}
+                                                className={`font-bold py-2 px-5 rounded-lg flex items-center gap-2 transition-colors text-white shadow-sm disabled:bg-gray-400 ${csExcluido ? 'bg-amber-600 hover:bg-amber-700' : 'bg-indigo-700 hover:bg-indigo-800'}`}
+                                            >
+                                                {csEjecutando
+                                                    ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Ejecutando...</>
+                                                    : csExcluido
+                                                        ? <><Icon name="unlock" size={16} /> Incluir y Agendar</>
+                                                        : <><Icon name="calendar" size={16} /> Agendar Registro</>
+                                                }
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* CAJA SQL (modo manual) */}
+                                {modoEjecucion === 'manual' && csSqlResult && csSqlResult.includes('UPDATE') && (
+                                    <div className="flex flex-col gap-2">
+                                        <div className="flex justify-between items-center">
+                                            <h4 className="font-bold text-gray-700 text-sm flex items-center gap-2"><Icon name="code" size={15} /> Query Generada</h4>
+                                            <CopyButton text={csSqlResult} onSuccess={() => addToast('Query copiada.', 'success')} label="Copiar" style="dark" />
+                                        </div>
+                                        <pre className="bg-gray-900 text-green-300 text-xs p-4 rounded-lg overflow-x-auto whitespace-pre-wrap font-mono max-h-40 overflow-y-auto">{csSqlResult}</pre>
+                                        <div className="bg-amber-50 border border-amber-400 rounded p-3 text-xs text-amber-800">
+                                            <strong>⚠️ Recuerda:</strong> Ejecuta esta query en el motor de base de datos de Vocalcom para aplicar los cambios.
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* BOTÓN PROCESAR */}
+                {/* CONFIGURACIÓN NIVABS */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '1rem', background: '#EEF2FF', borderRadius: '8px', border: '1px solid #C7D2FE', marginBottom: '1rem' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem', fontWeight: 'bold', color: '#4338CA', cursor: 'pointer' }}>
+                        <input type="checkbox" checked={limpiarIntentos} onChange={e => setLimpiarIntentos(e.target.checked)} />
+                        🧹 Limpiar Intentos (NIVABS)
+                    </label>
+                    {limpiarIntentos && (
+                        <div className="fade-in" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <label className="text-xs font-bold" style={{ margin: 0, color: '#4338CA' }}>Valor Nuevo:</label>
+                            <input
+                                type="number"
+                                className="input"
+                                min="1" max="5"
+                                style={{ width: '60px', textAlign: 'center', padding: '0.3rem', border: '1px solid #A5B4FC', borderRadius: '4px', outline: 'none' }}
+                                value={nivabsValue}
+                                onChange={e => setNivabsValue(e.target.value)}
+                            />
+                        </div>
+                    )}
+                </div>
+
+                {(() => {
+                    const totalValidos = filas.filter(f => f.campana && f.agente && f.indice).length + stagingRows.filter(f => f.campana && f.agente && f.indice).length;
+                    return (
+                        <button type="button" onClick={procesarAgendamiento} disabled={isLoading || totalValidos === 0} className="w-full bg-indigo-800 hover:bg-indigo-900 disabled:bg-gray-400 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition-colors shadow-md">
+                            {isLoading ? <><div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Procesando...</> : <><Icon name="calendar" size={18} /> {modoEjecucion === 'automatico' ? 'Ejecutar Agendamiento' : 'Generar Query'} ({totalValidos} registros)</>}
+                        </button>
+                    );
+                })()}
+
+                {/* QUERY GENERADA */}
+                {sqlResult && (
+                    <div className="flex flex-col gap-2">
+                        <div className="flex justify-between items-center">
+                            <h4 className="font-bold text-gray-700 text-sm flex items-center gap-2"><Icon name="code" size={15} /> Query de Agendamiento</h4>
+                            <button type="button" onClick={copiarSQL} className="bg-gray-800 hover:bg-gray-900 text-white text-xs font-bold px-3 py-1.5 rounded flex items-center gap-1">
+                                <Icon name="copy" size={13} /> Copiar
+                            </button>
+                        </div>
+                        <pre className="bg-gray-900 text-green-300 text-xs p-4 rounded-lg overflow-x-auto whitespace-pre-wrap font-mono max-h-64 overflow-y-auto">{sqlResult}</pre>
+                        {modoEjecucion === 'manual' && (
+                            <div className="bg-amber-50 border border-amber-400 rounded p-3 text-xs text-amber-800">
+                                <strong>⚠️ Recuerda:</strong> Ejecuta estas queries en el motor de base de datos de Vocalcom para que el agendamiento quede registrado.
+                            </div>
+                        )}
+                    </div>
+                )}
+            </div>
+        );
+    };
+
+    // ========================================================================
+    // TAREA 14: Liberación de Registros Vocalcom
+    // ========================================================================
+    const TaskLiberacionVocalcom = ({ Icon, addToast }) => {
+
+        // --- ESTADOS DE CATÁLOGOS ---
+        const [campanas, setCampanas] = useState([]);
+        const [cargandoCatalogos, setCargandoCatalogos] = useState(false);
+
+        // --- CAMPAÑA SELECCIONADA ---
+        const [campanaSeleccionada, setCampanaSeleccionada] = useState(null); // { Result, TablaCliente, NombreCampana }
+
+        // --- COLUMNAS DETECTADAS ---
+        const [detectedColumns, setDetectedColumns] = useState([]);
+        const [campoMesCarga, setCampoMesCarga] = useState(''); // 'MESCARGA' | 'MES_CARGA' | ''
+
+        // --- WHERE BUILDER ---
+        // Fijos: MESCARGA/MES_CARGA = mesCurso, STATUS = 2
+        // Opcionales: array de { id, columna, operador, valor, valoresColumna, cargandoValores }
+        const [whereExtras, setWhereExtras] = useState([]);
+        const [whereBuilderOpen, setWhereBuilderOpen] = useState(false);
+
+        // --- STATUS EXTRAS (adicionales al STATUS=2 fijo) ---
+        const [statusExtrasRaw, setStatusExtrasRaw] = useState(''); // string "3,4,5"
+
+        // --- COLUMNAS EXTRA SELECT ---
+        const [activeExtraCols, setActiveExtraCols] = useState(new Set());
+
+        // --- CONSULTA ---
+        const [isConsultando, setIsConsultando] = useState(false);
+        const [panelMessage, setPanelMessage] = useState({ type: '', text: '' });
+
+        // --- GRUPOS / SELECCIÓN ---
+        // grupos: array de { key, status, lib_status, detail, lib_detail, count, checked }
+        const [grupos, setGrupos] = useState([]);
+
+        // --- GRILLA ---
+        const [gridData, setGridData] = useState([]); // filas visibles según selección de grupos
+        const [gridColumns, setGridColumns] = useState([]); // cabeceras dinámicas
+
+        // --- OPCIONES DE LIBERACIÓN ---
+        const [borrarObservaciones, setBorrarObservaciones] = useState(false);
+        const [modoEjecucion, setModoEjecucion] = useState('manual');
+        const [sqlResult, setSqlResult] = useState('');
+        const [isEjecutando, setIsEjecutando] = useState(false);
+
+        // --- UTILIDADES ---
+        const getMesCurso = () => {
+            const d = new Date();
+            const meses = ['ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO',
+                'JULIO', 'AGOSTO', 'SEPTIEMBRE', 'OCTUBRE', 'NOVIEMBRE', 'DICIEMBRE'];
+            return `${meses[d.getMonth()]}_${String(d.getFullYear()).slice(-2)}`;
+        };
+        const mesCurso = getMesCurso(); // ej: "MARZO_26"
+
+        // --- CARGAR CATÁLOGOS ---
+        const cargarCatalogos = async () => {
+            if (!window.nexusAPI) { addToast('No hay conexión SQL activa. Conéctate desde Administración.', 'error'); return; }
+            setCargandoCatalogos(true);
+            setPanelMessage({ type: '', text: '' });
+            try {
+                const q = `
+                SELECT 
+                    CONCAT('[', Base, ']..[C', customerId, '_', Name, ']') AS Result,
+                    CONCAT('[', Base, ']..[CLIENTE_', CampaignId, ']') AS TablaCliente,
+                    CampaignId AS NombreCampana
+                FROM HN_Admin..ListCallFiles
+                WHERE CampaignId IS NOT NULL AND CampaignId <> ''
+                ORDER BY CampaignId ASC`;
+                const r = await window.nexusAPI.executeSQL(q);
+                if (!r.success) throw new Error(r.error);
+                setCampanas(r.data);
+                setPanelMessage({ type: 'success', text: `${r.data.length} campañas cargadas.` });
+            } catch (err) {
+                setPanelMessage({ type: 'error', text: 'Error al cargar catálogos: ' + err.message });
+            }
+            setCargandoCatalogos(false);
+        };
+
+        // --- SELECCIONAR CAMPAÑA Y MAPEAR COLUMNAS ---
+        const seleccionarCampana = async (campResult) => {
+            const camp = campanas.find(c => c.Result === campResult);
+            if (!camp) return;
+            setCampanaSeleccionada(camp);
+            setDetectedColumns([]);
+            setCampoMesCarga('');
+            setWhereExtras([]);
+            setActiveExtraCols(new Set());
+            setGrupos([]);
+            setGridData([]);
+            setGridColumns([]);
+            setSqlResult('');
+            setPanelMessage({ type: '', text: '' });
+
+            if (!window.nexusAPI) return;
+            // Mapeo silencioso de columnas
+            try {
+                const qMap = `SELECT TOP 1 * FROM ${camp.TablaCliente} a JOIN ${camp.Result} b ON a.INDICE = b.INDICE`;
+                const rMap = await window.nexusAPI.executeSQL(qMap);
+                if (rMap.success && rMap.data && rMap.data.length > 0) {
+                    const cols = Object.keys(rMap.data[0]);
+                    setDetectedColumns(cols);
+                    // Detectar campo mes carga
+                    const mc = cols.find(c => c.toUpperCase() === 'MESCARGA') ? 'MESCARGA'
+                        : cols.find(c => c.toUpperCase() === 'MES_CARGA') ? 'MES_CARGA' : '';
+                    setCampoMesCarga(mc);
+                }
+            } catch (e) { /* no bloquear */ }
+        };
+
+        // --- WHERE EXTRAS: AGREGAR ---
+        const agregarWhereExtra = () => {
+            setWhereExtras(prev => [...prev, { id: Date.now(), columna: '', operador: '=', valor: '', valoresColumna: [], cargandoValores: false, valoresSeleccionados: [] }]);
+            setWhereBuilderOpen(true);
+        };
+
+        const eliminarWhereExtra = (id) => setWhereExtras(prev => prev.filter(w => w.id !== id));
+
+        const actualizarWhere = (id, campo, valor) => {
+            setWhereExtras(prev => prev.map(w => w.id === id ? { ...w, [campo]: valor } : w));
+        };
+
+        // Cuando se selecciona operador CONTIENE, cargar valores distintos de la columna
+        const cargarValoresColumna = async (id, columna) => {
+            if (!columna || !campanaSeleccionada || !window.nexusAPI) return;
+            setWhereExtras(prev => prev.map(w => w.id === id ? { ...w, cargandoValores: true, valoresColumna: [], valoresSeleccionados: [] } : w));
+            try {
+                const q = `SELECT DISTINCT ${columna} FROM ${campanaSeleccionada.TablaCliente} a JOIN ${campanaSeleccionada.Result} b ON a.INDICE = b.INDICE WHERE ${columna} IS NOT NULL`;
+                const r = await window.nexusAPI.executeSQL(q);
+                let vals = r.success && r.data ? r.data.map(row => String(Object.values(row)[0])).filter(Boolean) : [];
+                // Ordenar: si todos son numéricos ordenar como número, sino alfabético
+                const todosNum = vals.every(v => !isNaN(v));
+                if (todosNum) vals.sort((a, b) => Number(a) - Number(b));
+                else vals.sort((a, b) => a.localeCompare(b));
+                setWhereExtras(prev => prev.map(w => w.id === id ? { ...w, cargandoValores: false, valoresColumna: vals } : w));
+            } catch (e) {
+                setWhereExtras(prev => prev.map(w => w.id === id ? { ...w, cargandoValores: false } : w));
+            }
+        };
+
+        const toggleValorContiene = (id, val) => {
+            setWhereExtras(prev => prev.map(w => {
+                if (w.id !== id) return w;
+                const sel = new Set(w.valoresSeleccionados);
+                sel.has(val) ? sel.delete(val) : sel.add(val);
+                return { ...w, valoresSeleccionados: [...sel] };
+            }));
+        };
+
+        // Construir el fragmento WHERE de un extra
+        const buildWhereFragment = (w) => {
+            if (!w.columna) return '';
+            const col = w.columna;
+            const op = w.operador;
+            if (op === 'CONTIENE') {
+                if (!w.valoresSeleccionados || w.valoresSeleccionados.length === 0) return '';
+                const isNum = w.valoresSeleccionados.every(v => !isNaN(v));
+                const lista = w.valoresSeleccionados.map(v => isNum ? v : `'${v}'`).join(',');
+                return `${col} IN (${lista})`;
+            }
+            if (op === 'IN') {
+                if (!w.valor.trim()) return '';
+                return `${col} IN (${w.valor.trim()})`;
+            }
+            if (op === 'IS NULL' || op === 'IS NOT NULL') return `${col} ${op}`;
+            if (!w.valor.trim()) return '';
+            const isNum = !isNaN(w.valor.trim());
+            return `${col} ${op} ${isNum ? w.valor.trim() : `'${w.valor.trim()}'`}`;
+        };
+
+        // --- CONSULTAR ESTADO (EJECUTAR QUERY) ---
+        const consultarEstado = async () => {
+            if (!campanaSeleccionada) { addToast('Selecciona una campaña primero.', 'warning'); return; }
+            if (!window.nexusAPI) { addToast('Sin conexión SQL activa.', 'error'); return; }
+            if (!campoMesCarga) { addToast('No se detectó campo de mes de carga (MESCARGA / MES_CARGA).', 'error'); return; }
+
+            setIsConsultando(true);
+            setGrupos([]);
+            setGridData([]);
+            setGridColumns([]);
+            setSqlResult('');
+            setPanelMessage({ type: '', text: '' });
+
+            try {
+                // Construir WHERE extras opcionales
+                const extras = whereExtras.map(buildWhereFragment).filter(Boolean);
+                const whereOpcional = extras.length > 0 ? ' AND ' + extras.join(' AND ') : '';
+
+                // STATUS fijo=2 + adicionales ingresados por el usuario
+                const statusAdic = statusExtrasRaw.split(',').map(s => s.trim()).filter(s => s !== '' && s !== '2' && !isNaN(s)).map(Number);
+                const statusArr = [2, ...statusAdic];
+                const whereStatus = statusArr.length === 1 ? 'STATUS = 2' : `STATUS IN (${statusArr.join(',')})`;
+
+                // Columnas extra select sin prefijo de alias
+                const colExtra = activeExtraCols.size > 0 ? ', ' + [...activeExtraCols].join(', ') : '';
+
+                const q = `SELECT INDICE, STATUS, LIB_STATUS, DETAIL, LIB_DETAIL, BASE, ${campoMesCarga}, DATE AS REC_DATE, ID_TV AS REC_ID_TV, TV AS REC_TV, '${campanaSeleccionada.NombreCampana}' AS NOMBRE_CAMPANA${colExtra} FROM ${campanaSeleccionada.TablaCliente} a JOIN ${campanaSeleccionada.Result} b ON a.INDICE = b.INDICE WHERE ${campoMesCarga} = '${mesCurso}' AND ${whereStatus}${whereOpcional}`;
+
+                const r = await window.nexusAPI.executeSQL(q);
+                if (!r.success) throw new Error(r.error);
+                if (!r.data || r.data.length === 0) {
+                    setPanelMessage({ type: 'warning', text: 'No se encontraron registros con los filtros aplicados.' });
+                    setIsConsultando(false);
+                    return;
+                }
+
+                // Agrupar por STATUS + LIB_STATUS + DETAIL + LIB_DETAIL
+                const mapaGrupos = {};
+                for (const row of r.data) {
+                    const key = `${row.STATUS}|${row.LIB_STATUS || ''}|${row.DETAIL}|${row.LIB_DETAIL || ''}`;
+                    if (!mapaGrupos[key]) {
+                        mapaGrupos[key] = {
+                            key,
+                            status: row.STATUS,
+                            lib_status: row.LIB_STATUS || '',
+                            detail: row.DETAIL,
+                            lib_detail: row.LIB_DETAIL || '',
+                            count: 0,
+                            checked: false,
+                            indices: []
+                        };
+                    }
+                    mapaGrupos[key].count++;
+                    mapaGrupos[key].indices.push(row.INDICE);
+                }
+
+                const gruposArr = Object.values(mapaGrupos).sort((a, b) => b.count - a.count);
+                setGrupos(gruposArr);
+
+                // Guardar data cruda para poblar grilla al seleccionar grupos
+                const colsData = Object.keys(r.data[0]);
+                setGridColumns(colsData);
+                // Asociar row a su grupo key para filtrar luego
+                const dataConGrupo = r.data.map(row => ({
+                    ...row,
+                    __grupoKey: `${row.STATUS}|${row.LIB_STATUS || ''}|${row.DETAIL}|${row.LIB_DETAIL || ''}`
+                }));
+                setGridData(dataConGrupo); // guardado completo, filtrado al seleccionar
+
+                setPanelMessage({ type: 'success', text: `${r.data.length} registros encontrados en ${gruposArr.length} grupos de estado.` });
+            } catch (err) {
+                setPanelMessage({ type: 'error', text: 'Error en consulta: ' + err.message });
+            }
+            setIsConsultando(false);
+        };
+
+        // --- TOGGLE GRUPO ---
+        const toggleGrupo = (key) => {
+            setGrupos(prev => prev.map(g => g.key === key ? { ...g, checked: !g.checked } : g));
+        };
+
+        // Filas visibles = solo las de grupos seleccionados
+        const gruposChecked = grupos.filter(g => g.checked).map(g => g.key);
+        const gridVisible = gridData.filter(row => gruposChecked.includes(row.__grupoKey));
+        const indicesALiberar = gridVisible.map(r => r.INDICE);
+
+        // --- GENERAR / EJECUTAR LIBERACIÓN ---
+        const generarLiberacion = async () => {
+            if (indicesALiberar.length === 0) { addToast('Selecciona al menos un grupo para liberar.', 'warning'); return; }
+            if (!campanaSeleccionada) { addToast('Sin campaña seleccionada.', 'warning'); return; }
+
+            setIsEjecutando(true);
+            setSqlResult('');
+            setPanelMessage({ type: '', text: '' });
+
+            try {
+                const tablaCampana = campanaSeleccionada.Result;
+                const tablaCliente = campanaSeleccionada.TablaCliente;
+                const indices = indicesALiberar.join(',');
+
+                let sql = `-- ============================================================\n-- LIBERACIÓN DE REGISTROS VOCALCOM\n-- Campaña: ${campanaSeleccionada.NombreCampana}\n-- Registros: ${indicesALiberar.length} | Borrar Obs.: ${borrarObservaciones ? 'SÍ' : 'NO'}\n-- ============================================================\n\n`;
+
+                sql += `UPDATE ${tablaCampana} SET PRIORITE=1,VERSOP=-1,RAPPEL='Z999999999999',STATUSGROUP=0,STATUS=98,LIB_STATUS='recycled record',detail=0,lib_detail='',historique=NULL WHERE INDICE IN (${indices})\n`;
+
+                if (borrarObservaciones) {
+                    sql += `UPDATE ${tablaCliente} SET OBSERVACIONES=NULL WHERE INDICE IN (${indices})\n`;
+                }
+
+                setSqlResult(sql);
+
+                if (modoEjecucion === 'automatico') {
+                    const r1 = await window.nexusAPI.executeSQL(`UPDATE ${tablaCampana} SET PRIORITE=1,VERSOP=-1,RAPPEL='Z999999999999',STATUSGROUP=0,STATUS=98,LIB_STATUS='recycled record',detail=0,lib_detail='',historique=NULL WHERE INDICE IN (${indices})`);
+                    if (!r1.success) throw new Error(r1.error);
+
+                    if (borrarObservaciones) {
+                        const r2 = await window.nexusAPI.executeSQL(`UPDATE ${tablaCliente} SET OBSERVACIONES=NULL WHERE INDICE IN (${indices})`);
+                        if (!r2.success) throw new Error(r2.error);
+                    }
+                    setPanelMessage({ type: 'success', text: `✅ ${indicesALiberar.length} registros liberados exitosamente${borrarObservaciones ? ' (observaciones borradas)' : ''}.` });
+                } else {
+                    setPanelMessage({ type: 'success', text: `Query generada para ${indicesALiberar.length} registros. Copia y ejecuta en el motor.` });
+                }
+            } catch (err) {
+                setPanelMessage({ type: 'error', text: 'Error al liberar: ' + err.message });
+            }
+            setIsEjecutando(false);
+        };
+
+        // --- EXPORTAR EXCEL ---
+        const exportarExcel = () => {
+            if (gridVisible.length === 0) { addToast('No hay datos visibles para exportar.', 'warning'); return; }
+            try {
+                const exportData = gridVisible.map(row => {
+                    const r = { ...row };
+                    delete r.__grupoKey;
+                    return r;
+                });
+                const { ws } = crearSheetLimpio(exportData);
+                if (!ws) { addToast('Sin datos para exportar.', 'warning'); return; }
+                const wb = window.XLSX.utils.book_new();
+                window.XLSX.utils.book_append_sheet(wb, ws, 'Registros');
+                const nombreArchivo = `Liberacion_${campanaSeleccionada ? campanaSeleccionada.NombreCampana : 'VTec'}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+                window.XLSX.writeFile(wb, nombreArchivo);
+                addToast(`Excel exportado: ${exportData.length} registros.`, 'success');
+            } catch (err) {
+                addToast('Error al exportar: ' + err.message, 'error');
+            }
+        };
+
+        const copiarSQL = async () => {
+            try { await navigator.clipboard.writeText(sqlResult); addToast('Query copiada al portapapeles.', 'success'); }
+            catch { addToast('Error al copiar.', 'error'); }
+        };
+
+        const OPERADORES = ['=', '!=', '<', '>', '<=', '>=', 'LIKE', 'NOT LIKE', 'IN', 'IS NULL', 'IS NOT NULL', 'CONTIENE'];
+
+        return (
+            <div className="flex flex-col gap-5 p-1">
+
+                {/* ENCABEZADO */}
+                <div className="bg-emerald-900 rounded-lg p-4 text-white">
+                    <h3 className="text-lg font-bold flex items-center gap-2">
+                        <Icon name="unlock" size={20} /> Liberación de Registros Vocalcom
+                    </h3>
+                    <p className="text-emerald-200 text-xs mt-1">Consulta y libera registros de campañas Vocalcom generando o ejecutando las queries de reciclado.</p>
+                </div>
+
+                {/* PASO 1: SELECCIÓN DE CAMPAÑA */}
+                <div className="border border-gray-200 rounded-lg overflow-hidden">
+                    <div className="bg-gray-100 px-4 py-2 flex items-center gap-2">
+                        <span className="text-xs font-black text-gray-500 uppercase tracking-wide bg-emerald-600 text-white rounded-full w-5 h-5 flex items-center justify-center">1</span>
+                        <span className="text-sm font-bold text-gray-700">Selección de Campaña</span>
+                    </div>
+                    <div className="p-4 flex flex-col gap-3">
+                        <div className="flex gap-3 items-end flex-wrap">
+                            <div className="flex flex-col gap-1 flex-1 min-w-48">
+                                <label className="text-xs font-bold text-gray-500 uppercase">Campaña</label>
+                                <select
+                                    className="border border-gray-300 rounded p-2 text-sm outline-none focus:border-emerald-500 bg-white"
+                                    value={campanaSeleccionada ? campanaSeleccionada.Result : ''}
+                                    onChange={e => seleccionarCampana(e.target.value)}
+                                    disabled={campanas.length === 0}
+                                >
+                                    <option value="">-- Selecciona una campaña --</option>
+                                    {campanas.map(c => (
+                                        <option key={c.Result} value={c.Result}>{c.NombreCampana} ({c.Result.replace(/^\[.+?\]\.\.\[/, '').replace(/\]$/, '')})</option>
+                                    ))}
+                                </select>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={cargarCatalogos}
+                                disabled={cargandoCatalogos}
+                                className="bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-400 text-white font-bold py-2 px-4 rounded text-sm flex items-center gap-2 transition-colors"
+                            >
+                                {cargandoCatalogos
+                                    ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                                    : <Icon name="refresh-cw" size={14} />}
+                                {campanas.length > 0 ? `Recargar (${campanas.length})` : 'Cargar Catálogos'}
+                            </button>
+                        </div>
+                        {campanaSeleccionada && (
+                            <div className="flex flex-wrap gap-3 text-xs">
+                                <span className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-2 py-1 rounded font-mono font-bold">Tabla C5: {campanaSeleccionada.Result.replace(/^\[.+?\]\.\.\[/, '').replace(/\]$/, '')}</span>
+                                <span className="bg-blue-50 border border-blue-200 text-blue-800 px-2 py-1 rounded font-mono font-bold">Tabla Cliente: {campanaSeleccionada.TablaCliente.replace(/^\[.+?\]\.\.\[/, '').replace(/\]$/, '')}</span>
+                                {campoMesCarga
+                                    ? <span className="bg-purple-50 border border-purple-200 text-purple-800 px-2 py-1 rounded font-bold">✓ Campo mes: {campoMesCarga}</span>
+                                    : <span className="bg-amber-50 border border-amber-200 text-amber-800 px-2 py-1 rounded font-bold">⚠ Campo mes no detectado aún</span>
+                                }
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                {/* PASO 2: FILTROS DE CONSULTA */}
+                {campanaSeleccionada && (
+                    <div className="border border-gray-200 rounded-lg overflow-hidden">
+                        <div className="bg-gray-100 px-4 py-2 flex items-center gap-2">
+                            <span className="text-xs font-black bg-emerald-600 text-white rounded-full w-5 h-5 flex items-center justify-center">2</span>
+                            <span className="text-sm font-bold text-gray-700">Filtros de Consulta</span>
+                        </div>
+                        <div className="p-4 flex flex-col gap-3">
+
+                            {/* WHERE FIJOS */}
+                            <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 flex flex-col gap-2">
+                                <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">Condiciones fijas (siempre activas)</p>
+                                <div className="flex flex-wrap gap-2">
+                                    <span className="bg-emerald-100 text-emerald-800 text-xs font-mono font-bold px-3 py-1.5 rounded-full border border-emerald-300">
+                                        {campoMesCarga || 'MESCARGA/MES_CARGA'} = <strong>'{mesCurso}'</strong>
+                                    </span>
+                                    <span className="bg-blue-100 text-blue-800 text-xs font-mono font-bold px-3 py-1.5 rounded-full border border-blue-300">
+                                        STATUS = <strong>2</strong>
+                                    </span>
+                                </div>
+                                <div className="flex items-center gap-2 mt-1">
+                                    <span className="text-xs text-gray-400">+ Otros STATUS (separados por coma):</span>
+                                    <input
+                                        type="text"
+                                        className="border border-gray-300 rounded px-2 py-1 text-xs font-mono outline-none focus:border-blue-400 w-40"
+                                        placeholder="ej: 3,4,94"
+                                        value={statusExtrasRaw}
+                                        onChange={e => setStatusExtrasRaw(e.target.value.replace(/[^0-9,]/g, ''))}
+                                    />
+                                    {statusExtrasRaw.trim() && (
+                                        <span className="text-xs text-blue-600 font-mono">
+                                            → STATUS IN (2,{statusExtrasRaw.split(',').filter(s => s.trim() && s !== '2').join(',')})
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* WHERE OPCIONALES */}
+                            {whereExtras.length > 0 && (
+                                <div className="flex flex-col gap-2">
+                                    {whereExtras.map((w) => (
+                                        <div key={w.id} className="bg-white border border-gray-200 rounded-lg p-3 flex flex-col gap-2 shadow-sm">
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                                <span className="text-xs font-bold text-gray-400 uppercase">AND</span>
+                                                {/* Columna */}
+                                                <select
+                                                    className="border border-gray-300 rounded p-1.5 text-xs outline-none focus:border-emerald-500 bg-white min-w-32"
+                                                    value={w.columna}
+                                                    onChange={e => {
+                                                        actualizarWhere(w.id, 'columna', e.target.value);
+                                                        // Si ya era CONTIENE, recargar valores
+                                                        if (w.operador === 'CONTIENE') cargarValoresColumna(w.id, e.target.value);
+                                                    }}
+                                                >
+                                                    <option value="">-- Columna --</option>
+                                                    {detectedColumns.map(c => <option key={c} value={c}>{c}</option>)}
+                                                </select>
+                                                {/* Operador */}
+                                                <select
+                                                    className="border border-gray-300 rounded p-1.5 text-xs outline-none focus:border-emerald-500 bg-white"
+                                                    value={w.operador}
+                                                    onChange={e => {
+                                                        actualizarWhere(w.id, 'operador', e.target.value);
+                                                        if (e.target.value === 'CONTIENE' && w.columna) {
+                                                            cargarValoresColumna(w.id, w.columna);
+                                                        }
+                                                    }}
+                                                >
+                                                    {OPERADORES.map(op => <option key={op} value={op}>{op}</option>)}
+                                                </select>
+                                                {/* Valor: solo si no es IS NULL / IS NOT NULL / CONTIENE */}
+                                                {w.operador !== 'IS NULL' && w.operador !== 'IS NOT NULL' && w.operador !== 'CONTIENE' && (
+                                                    <input
+                                                        type="text"
+                                                        className="border border-gray-300 rounded p-1.5 text-xs outline-none focus:border-emerald-500 font-mono flex-1 min-w-28"
+                                                        placeholder={w.operador === 'IN' ? "1,2,3 o 'A','B'" : 'Valor'}
+                                                        value={w.valor}
+                                                        onChange={e => actualizarWhere(w.id, 'valor', e.target.value)}
+                                                    />
+                                                )}
+                                                {/* Preview fragmento */}
+                                                {buildWhereFragment(w) && (
+                                                    <span className="text-xs font-mono text-emerald-700 bg-emerald-50 px-2 py-1 rounded border border-emerald-200 max-w-xs truncate">
+                                                        {buildWhereFragment(w)}
+                                                    </span>
+                                                )}
+                                                <button type="button" onClick={() => eliminarWhereExtra(w.id)} className="text-red-400 hover:text-red-600 ml-auto text-xs font-bold px-1 rounded hover:bg-red-50">✕</button>
+                                            </div>
+
+                                            {/* CONTIENE: checkboxes de valores */}
+                                            {w.operador === 'CONTIENE' && (
+                                                <div className="mt-1 pl-4">
+                                                    {w.cargandoValores ? (
+                                                        <div className="flex items-center gap-2 text-xs text-gray-400 italic">
+                                                            <div className="w-3 h-3 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+                                                            Cargando valores distintos...
+                                                        </div>
+                                                    ) : w.valoresColumna.length === 0 ? (
+                                                        <span className="text-xs text-gray-400 italic">Selecciona una columna para ver sus valores</span>
+                                                    ) : (
+                                                        <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
+                                                            {w.valoresColumna.map(val => (
+                                                                <label key={val} className={`flex items-center gap-1.5 text-xs px-2 py-1 rounded-full border cursor-pointer transition-colors ${w.valoresSeleccionados.includes(val) ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-gray-700 border-gray-300 hover:border-emerald-400'}`}>
+                                                                    <input type="checkbox" className="hidden" checked={w.valoresSeleccionados.includes(val)} onChange={() => toggleValorContiene(w.id, val)} />
+                                                                    {val}
+                                                                </label>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            <button
+                                type="button"
+                                onClick={agregarWhereExtra}
+                                className="self-start text-xs font-bold text-emerald-700 border border-emerald-300 hover:bg-emerald-50 px-3 py-1.5 rounded-full transition-colors flex items-center gap-1"
+                            >
+                                <Icon name="plus" size={12} /> Agregar filtro AND
+                            </button>
+
+                            {/* COLUMNAS EXTRA SELECT */}
+                            <div className="border border-gray-200 rounded-lg p-3 flex flex-col gap-2 bg-gray-50">
+                                <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">Columnas adicionales en resultados (SELECT)</p>
+                                <div className="flex flex-wrap gap-2 items-center">
+                                    {[...activeExtraCols].map(col => (
+                                        <span key={col} className="flex items-center gap-1 bg-blue-100 text-blue-800 text-xs px-2 py-0.5 rounded-full border border-blue-200 font-mono">
+                                            {col}
+                                            <button type="button" onClick={() => setActiveExtraCols(prev => { const next = new Set(prev); next.delete(col); return next; })} className="text-blue-400 hover:text-blue-700 font-bold ml-0.5">✕</button>
+                                        </span>
+                                    ))}
+                                    {detectedColumns.length > 0 ? (
+                                        <select
+                                            className="border border-gray-300 bg-white text-gray-700 rounded px-2 py-1 text-xs outline-none focus:border-blue-400 cursor-pointer"
+                                            value=""
+                                            onChange={e => {
+                                                if (!e.target.value) return;
+                                                setActiveExtraCols(prev => new Set([...prev, e.target.value]));
+                                                e.target.value = '';
+                                            }}
+                                        >
+                                            <option value="">+ Agregar columna al resultado</option>
+                                            {detectedColumns
+                                                .filter(c => !activeExtraCols.has(c))
+                                                .map(c => <option key={c} value={c}>{c}</option>)}
+                                        </select>
+                                    ) : (
+                                        <span className="text-gray-400 text-xs italic">Las columnas se detectan al seleccionar la campaña</span>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* BOTÓN CONSULTAR */}
+                            <button
+                                type="button"
+                                onClick={consultarEstado}
+                                disabled={isConsultando || !campanaSeleccionada || !campoMesCarga}
+                                className="w-full bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-400 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition-colors shadow-md"
+                            >
+                                {isConsultando
+                                    ? <><div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Consultando...</>
+                                    : <><Icon name="search" size={18} /> Consultar Registros Candidatos</>}
+                            </button>
+                        </div>
+                    </div>
+                )}
+
+                {/* MENSAJE */}
+                {panelMessage.text && (
+                    <div className={`rounded-lg p-3 text-sm font-medium flex items-center gap-2 ${panelMessage.type === 'success' ? 'bg-green-50 border border-green-300 text-green-800' : panelMessage.type === 'error' ? 'bg-red-50 border border-red-300 text-red-800' : 'bg-amber-50 border border-amber-300 text-amber-800'}`}>
+                        <Icon name={panelMessage.type === 'error' ? 'alert-triangle' : panelMessage.type === 'warning' ? 'alert-circle' : 'check-circle'} size={16} />
+                        {panelMessage.text}
+                    </div>
+                )}
+
+                {/* PASO 3: SELECCIÓN DE GRUPOS A LIBERAR */}
+                {grupos.length > 0 && (
+                    <div className="border border-gray-200 rounded-lg overflow-hidden">
+                        <div className="bg-gray-100 px-4 py-2 flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs font-black bg-emerald-600 text-white rounded-full w-5 h-5 flex items-center justify-center">3</span>
+                                <span className="text-sm font-bold text-gray-700">Selección de Registros a Liberar</span>
+                                <span className="text-xs text-gray-500">— marca los grupos que deseas liberar</span>
+                            </div>
+                            {indicesALiberar.length > 0 && (
+                                <span className="bg-emerald-100 text-emerald-800 text-xs font-black px-2 py-0.5 rounded-full border border-emerald-300">
+                                    {indicesALiberar.length} seleccionados
+                                </span>
+                            )}
+                        </div>
+                        <div className="p-4">
+                            {/* Cabecera tabla grupos */}
+                            <div className="grid grid-cols-12 text-xs font-bold text-gray-500 uppercase px-3 pb-1 border-b border-gray-200 mb-1">
+                                <div className="col-span-1 text-center">✓</div>
+                                <div className="col-span-1 text-center">STATUS</div>
+                                <div className="col-span-3">LIB_STATUS</div>
+                                <div className="col-span-1 text-center">DETAIL</div>
+                                <div className="col-span-4">LIB_DETAIL</div>
+                                <div className="col-span-2 text-right">Registros</div>
+                            </div>
+                            <div className="flex flex-col gap-1 max-h-72 overflow-y-auto">
+                                {grupos.map(g => (
+                                    <label
+                                        key={g.key}
+                                        className={`grid grid-cols-12 items-center text-sm rounded-lg px-3 py-2 cursor-pointer transition-colors border ${g.checked ? 'bg-emerald-50 border-emerald-300 shadow-sm' : 'bg-white border-gray-200 hover:border-emerald-300 hover:bg-gray-50'}`}
+                                    >
+                                        <div className="col-span-1 text-center">
+                                            <input type="checkbox" checked={g.checked} onChange={() => toggleGrupo(g.key)} className="accent-emerald-600 w-4 h-4" />
+                                        </div>
+                                        <div className="col-span-1 text-center">
+                                            <span className="font-mono font-black text-blue-700 text-xs">{g.status}</span>
+                                        </div>
+                                        <div className="col-span-3 text-xs text-gray-700 truncate" title={g.lib_status}>{g.lib_status || <span className="text-gray-300 italic">—</span>}</div>
+                                        <div className="col-span-1 text-center">
+                                            <span className="font-mono font-bold text-purple-700 text-xs">{g.detail}</span>
+                                        </div>
+                                        <div className="col-span-4 text-xs text-gray-600 truncate" title={g.lib_detail}>{g.lib_detail || <span className="text-gray-300 italic">—</span>}</div>
+                                        <div className="col-span-2 text-right">
+                                            <span className={`font-black text-sm ${g.checked ? 'text-emerald-700' : 'text-gray-600'}`}>{g.count.toLocaleString()}</span>
+                                        </div>
+                                    </label>
+                                ))}
+                            </div>
+                            {/* Resumen selección */}
+                            <div className="mt-3 pt-2 border-t border-gray-200 flex items-center justify-between text-xs text-gray-500">
+                                <span>{grupos.filter(g => g.checked).length} de {grupos.length} grupos seleccionados</span>
+                                <div className="flex gap-2">
+                                    <button type="button" onClick={() => setGrupos(prev => prev.map(g => ({ ...g, checked: true })))} className="text-emerald-600 font-bold hover:underline">Todos</button>
+                                    <span className="text-gray-300">|</span>
+                                    <button type="button" onClick={() => setGrupos(prev => prev.map(g => ({ ...g, checked: false })))} className="text-red-500 font-bold hover:underline">Ninguno</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* PASO 4: OPCIONES DE LIBERACIÓN */}
+                {grupos.length > 0 && (
+                    <div className="border border-gray-200 rounded-lg overflow-hidden">
+                        <div className="bg-gray-100 px-4 py-2 flex items-center gap-2">
+                            <span className="text-xs font-black bg-emerald-600 text-white rounded-full w-5 h-5 flex items-center justify-center">4</span>
+                            <span className="text-sm font-bold text-gray-700">Opciones de Liberación</span>
+                        </div>
+                        <div className="p-4 flex flex-col gap-4">
+
+                            <div className="flex flex-wrap gap-4">
+                                {/* Checkbox borrar observaciones */}
+                                <label className={`flex items-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-colors ${borrarObservaciones ? 'border-red-400 bg-red-50' : 'border-gray-200 bg-white hover:border-gray-300'}`}>
+                                    <input type="checkbox" checked={borrarObservaciones} onChange={e => setBorrarObservaciones(e.target.checked)} className="accent-red-600 w-4 h-4" />
+                                    <div>
+                                        <p className="text-sm font-bold text-gray-800">🗑 Borrar Observaciones</p>
+                                        <p className="text-xs text-gray-500">Limpia el campo OBSERVACIONES en tabla Cliente</p>
+                                    </div>
+                                </label>
+
+                                {/* Modo ejecución */}
+                                <div className="flex flex-col gap-2">
+                                    <label className={`flex items-center gap-2 p-2.5 rounded-lg border-2 cursor-pointer transition-colors text-sm ${modoEjecucion === 'manual' ? 'border-emerald-500 bg-emerald-50' : 'border-gray-200 bg-white hover:border-gray-300'}`}>
+                                        <input type="radio" name="modoLib" value="manual" checked={modoEjecucion === 'manual'} onChange={() => setModoEjecucion('manual')} />
+                                        <div>
+                                            <p className="font-bold text-gray-800">📋 Generar Query</p>
+                                            <p className="text-xs text-gray-500">Copia y ejecuta manualmente</p>
+                                        </div>
+                                    </label>
+                                    <label className={`flex items-center gap-2 p-2.5 rounded-lg border-2 cursor-pointer transition-colors text-sm ${modoEjecucion === 'automatico' ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white hover:border-gray-300'}`}>
+                                        <input type="radio" name="modoLib" value="automatico" checked={modoEjecucion === 'automatico'} onChange={() => setModoEjecucion('automatico')} />
+                                        <div>
+                                            <p className="font-bold text-gray-800">⚡ Ejecutar Automático</p>
+                                            <p className="text-xs text-gray-500">Requiere conexión SQL activa</p>
+                                        </div>
+                                    </label>
+                                </div>
+                            </div>
+
+                            {/* Botones acción */}
+                            <div className="flex flex-wrap gap-3">
+                                <button
+                                    type="button"
+                                    onClick={generarLiberacion}
+                                    disabled={isEjecutando || indicesALiberar.length === 0}
+                                    className="flex-1 min-w-40 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-400 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition-colors shadow-md"
+                                >
+                                    {isEjecutando
+                                        ? <><div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> {modoEjecucion === 'automatico' ? 'Ejecutando...' : 'Generando...'}</>
+                                        : <><Icon name="unlock" size={18} /> {modoEjecucion === 'automatico' ? 'Ejecutar Liberación' : 'Generar Query'} ({indicesALiberar.length})</>}
+                                </button>
+
+                                <button
+                                    type="button"
+                                    onClick={exportarExcel}
+                                    disabled={gridVisible.length === 0}
+                                    className="bg-green-700 hover:bg-green-800 disabled:bg-gray-300 disabled:text-gray-500 text-white font-bold py-3 px-5 rounded-lg flex items-center gap-2 transition-colors shadow-md"
+                                    title="Descargar la grilla actual en Excel"
+                                >
+                                    <Icon name="download" size={18} /> Excel
+                                </button>
+                            </div>
+
+                            {/* QUERY GENERADA */}
+                            {sqlResult && (
+                                <div className="flex flex-col gap-2 mt-1">
+                                    <div className="flex justify-between items-center">
+                                        <h4 className="font-bold text-gray-700 text-sm flex items-center gap-2">
+                                            <Icon name="code" size={15} /> Query de Liberación
+                                        </h4>
+                                        <button type="button" onClick={copiarSQL} className="bg-gray-800 hover:bg-gray-900 text-white text-xs font-bold px-3 py-1.5 rounded flex items-center gap-1">
+                                            <Icon name="copy" size={13} /> Copiar
+                                        </button>
+                                    </div>
+                                    <pre className="bg-gray-900 text-green-300 text-xs p-4 rounded-lg overflow-x-auto whitespace-pre-wrap font-mono max-h-48 overflow-y-auto">{sqlResult}</pre>
+                                    {modoEjecucion === 'manual' && (
+                                        <div className="bg-amber-50 border border-amber-400 rounded p-3 text-xs text-amber-800">
+                                            <strong>⚠️ Recuerda:</strong> Copia y ejecuta estas queries en SQL Server (motor de Vocalcom) para que los registros queden reciclados con STATUS=98.
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )}
+
+                {/* PASO 5: GRILLA DE REGISTROS (solo si hay grupos seleccionados) */}
+                {gridVisible.length > 0 && (
+                    <div className="border border-gray-200 rounded-lg overflow-hidden">
+                        <div className="bg-gray-100 px-4 py-2 flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs font-black bg-emerald-600 text-white rounded-full w-5 h-5 flex items-center justify-center">5</span>
+                                <span className="text-sm font-bold text-gray-700">Registros a Liberar</span>
+                                <span className="text-xs text-gray-400">({gridVisible.length.toLocaleString()} filas)</span>
+                            </div>
+                        </div>
+                        <div className="overflow-x-auto max-h-96 overflow-y-auto">
+                            <table className="w-full text-xs border-collapse">
+                                <thead className="sticky top-0 z-10">
+                                    <tr className="bg-gray-800 text-white">
+                                        {gridColumns.map(col => (
+                                            <th key={col} className="p-2 text-left font-bold uppercase whitespace-nowrap border-r border-gray-700 last:border-r-0">{col}</th>
+                                        ))}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {gridVisible.map((row, idx) => (
+                                        <tr key={row.INDICE} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                                            {gridColumns.map(col => (
+                                                <td key={col} className="p-2 border-t border-gray-100 whitespace-nowrap font-mono text-gray-700">
+                                                    {row[col] !== null && row[col] !== undefined ? String(row[col]) : <span className="text-gray-300">—</span>}
+                                                </td>
+                                            ))}
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                )}
+
+            </div>
+        );
+    };
+
+    // ========================================================================
     // NÚCLEO PRINCIPAL (HOST)
     // ========================================================================
     return () => {
@@ -6684,7 +9643,7 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
             },
             {
                 id: 'marcado_estrategias',
-                name: 'Estrategias Santander Terreno',
+                name: 'Estrategias Santander Consumer',
                 component: <TaskMarcadoEstrategias Icon={Icon} db={db} />,
                 guide: [
                     'Esta tarea genera queries SQL para marcar estrategias en Vicidial. No genera archivos de carga.',
@@ -6754,7 +9713,66 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                     'IMPORTANTE: Los registros bloqueados en CONSUMO quedan con MESCARGA marcado como "Mes_yy_Excl" y PRIORITE = -11, lo que los excluye del marcado normal.'
                 ]
             }
-            // --- TAREA 12: (Aquí irá la próxima) ---
+            // --- TAREA 12: Bajas BCH ---
+            , {
+                id: 'bajas_bch',
+                name: 'Bajas BCO Chile',
+                component: <TaskBajasBCH Icon={Icon} addToast={addToast} />,
+                guide: [
+                    'Esta tarea aplica bajas diarias en las campañas BCH CONSUMO y BCH CONSUMO DERIVACIÓN.',
+                    '1. Carga el archivo del cliente con los ROW_IDs a dar de baja (CSV, Excel o TXT).',
+                    '2. Configura la fecha de baja — por defecto es el día de hoy. Se usará como FECHA_BAJA y para calcular el MESCARGA con sufijo _Excl.',
+                    '3. Selecciona el modo: "Generar Query" para copiar y ejecutar manualmente (recomendado), o "Ejecutar Automático" si tienes conexión SQL activa.',
+                    '4. Presiona "Procesar Bajas". La app consulta ambas campañas filtrando por ROW_ID y STATUS válido para baja.',
+                    '5. Revisa el reporte: bajas recibidas, cruzadas en Consumo, en Derivación y total aplicadas.',
+                    '6. Si elegiste modo manual: copia las queries y ejecútalas en el motor. Si elegiste automático: verifica el resultado en el reporte.',
+                    'IMPORTANTE: Los registros quedan con PRIORITE = -11, RAPPEL = Z999999999999 y VERSOP = -1. Esto los excluye del marcado normal.'
+                ]
+            }
+            // --- TAREA 13: Agendamiento ---
+            , {
+                id: 'agendamiento_vocalcom',
+                name: 'Agendamiento Vocalcom',
+                component: <TaskAgendamientoVocalcom Icon={Icon} addToast={addToast} />,
+                guide: [
+                    'Esta tarea genera o ejecuta agendamientos masivos en el CRM Vocalcom.',
+                    '--- AGENDAMIENTO GENERAL ---',
+                    '1. Asegúrate de tener una conexión SQL activa desde Administración (el sitio conectado determina las campañas disponibles — .7 para Vetec/BCH, .6 para Coopeuch).',
+                    '2. Presiona "Cargar Catálogos" para traer las campañas y agentes disponibles desde la base de datos.',
+                    '3. Configura la fecha y hora de agenda. El RAPPEL se construye automáticamente como T{fecha}{hora}.',
+                    '4. Selecciona el modo de entrada: Manual (fila a fila), Pegar (pega texto con Campaña,Agente,Índice) o Archivo (Excel/CSV).',
+                    '5. En la grilla, usa el botón "Ver" para consultar el estado actual de cualquier índice antes de agendar.',
+                    '6. Selecciona el modo: "Generar Query" para copiar y ejecutar manualmente (recomendado), o "Ejecutar Auto" para aplicar directo desde la app.',
+                    '7. Presiona el botón de procesar. Si elegiste modo manual, copia la query y ejecútala en el motor de Vocalcom.',
+                    '--- FIX AGENDA ---',
+                    '8. Usa la pestaña "🔧 Fix Agenda" para detectar y reparar agendas rotas (STATUS=94 + RAPPEL=Z999999999999 + PRIORITE>=0).',
+                    '9. Selecciona la campaña y verifica el mes de carga auto-detectado. Busca los registros afectados.',
+                    '10. Usa el botón "Fix" individual por registro o "Reparar Todos" para corregir en lote. En modo manual se acumulan las queries para ejecutar en el motor.',
+                    '--- CONSULTAR REGISTRO ---',
+                    '11. Usa la pestaña "🔍 Consultar" para buscar un registro por su identificador (ROW_ID, RUT o RUT_CLIENTE — detectado automáticamente).',
+                    '12. Si el registro está en el mes excluido (_EXCL) se mostrará una alerta. Activa el check "Habilitar" y usa "Solo Incluir" para reactivarlo sin agendar, o "Incluir y Agendar" para hacer ambas acciones de una vez.',
+                    'IMPORTANTE: El STATUS 94 = VOLVER A LLAMAR. Verifica que los índices correspondan a la campaña correcta antes de ejecutar.'
+                ]
+            }
+            // --- TAREA 14: Liberación de Registros Vocalcom ---
+            , {
+                id: 'liberacion_vocalcom',
+                name: 'Liberación Registros Vocalcom',
+                component: <TaskLiberacionVocalcom Icon={Icon} addToast={addToast} />,
+                guide: [
+                    'Esta tarea permite consultar y liberar registros del CRM Vocalcom, generando o ejecutando las queries de reciclado (STATUS=98).',
+                    '1. Presiona "Cargar Catálogos" para traer las campañas disponibles desde la conexión SQL activa. Luego selecciona la campaña a trabajar — la app detectará automáticamente las columnas y el campo de mes de carga (MESCARGA o MES_CARGA).',
+                    '2. Configura los filtros de consulta. Los filtros fijos son siempre: el campo mes = mes en curso (ej: MARZO_26) y STATUS = 2. Puedes agregar más filtros AND con el botón "Agregar filtro AND". El operador CONTIENE carga automáticamente los valores distintos de la columna para seleccionar con checkboxes. El operador IN permite ingresar listas como 1,2,3.',
+                    '3. Agrega columnas adicionales al resultado (SELECT) desde el dropdown de columnas detectadas.',
+                    '4. Presiona "Consultar Registros Candidatos". Aparecerá el resumen agrupado por STATUS / LIB_STATUS / DETAIL / LIB_DETAIL con el conteo de cada grupo.',
+                    '5. En "Selección de Registros a Liberar", marca los grupos que deseas incluir. Los botones Todos / Ninguno permiten selección masiva. La grilla de registros se actualiza automáticamente al marcar.',
+                    '6. En "Opciones de Liberación": activa "Borrar Observaciones" si quieres limpiar el campo OBSERVACIONES (desactivado por defecto). Selecciona el modo de ejecución.',
+                    '7. Presiona el botón de liberación. Los registros quedarán con PRIORITE=1, VERSOP=-1, RAPPEL=Z999999999999, STATUS=98, LIB_STATUS=recycled record.',
+                    '8. Usa el botón "Excel" para descargar la grilla con los registros seleccionados, para compartir con el equipo los registros liberados.',
+                    'IMPORTANTE: La grilla solo se muestra cuando hay grupos seleccionados. Verifica siempre la campaña y los filtros antes de ejecutar.'
+                ]
+            }
+            // --- TAREA 15: (Aquí irá la próxima) ---
         ];
 
         // ========================================================================

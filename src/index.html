@@ -671,7 +671,7 @@
 
 
         // --- MÓDULO ADMIN ---
-        const AdminModule = ({ addToast, onNavigateHome, confirmAction }) => {
+        const AdminModule = ({ addToast, onNavigateHome, confirmAction, activePools = [], refreshPools = () => { } }) => {
             const [activeTab, setActiveTab] = useState('campaigns');
             const [data, setData] = useState([]);
             const [campaigns, setCampaigns] = useState([]);
@@ -683,37 +683,130 @@
             const [filterCampaign, setFilterCampaign] = useState('');
             const fileInputRef = useRef(null);
 
-            // NUEVO: Estados para SQL Volátil
+            // NUEVO: Estados para SQL Volátil y Perfiles
             const [sqlEngine, setSqlEngine] = useState('sqlserver');
-            const [sqlForm, setSqlForm] = useState({ server: '', port: '3306', database: '', user: '', password: '' });
+            const [sqlForm, setSqlForm] = useState({ name: '', server: '', port: '3306', database: '', user: '', password: '' });
             const [sqlConnected, setSqlConnected] = useState(false);
+            const [activeProfileName, setActiveProfileName] = useState('');
+
+            // Estado para gestionar perfiles (KeePass style)
+            const [savedConnections, setSavedConnections] = useState([]);
+            const [selectedProfileId, setSelectedProfileId] = useState('');
+            const [savePrompt, setSavePrompt] = useState({ open: false, tempName: '' });
+            const [isEditingProfile, setIsEditingProfile] = useState(false);
+
+            // Cargar perfiles al abrir la pestaña de base de datos
+            useEffect(() => {
+                if (activeTab === 'database') loadSavedConnections();
+            }, [activeTab]);
+
+            const loadSavedConnections = async () => {
+                try {
+                    const conns = await window.nexusAPI.getConnections();
+                    setSavedConnections(conns);
+                } catch (err) { console.error("Error cargando perfiles", err); }
+            };
+
+            const handleSelectProfile = (id) => {
+                setSelectedProfileId(id);
+                setIsEditingProfile(false); // Oculta los campos al cambiar de bóveda
+                if (!id) {
+                    setSqlForm({ name: '', server: '', port: '3306', database: '', user: '', password: '' });
+                    return;
+                }
+                const profile = savedConnections.find(c => c.id === id);
+                if (profile) {
+                    setSqlEngine(profile.engine);
+                    setSqlForm({ name: profile.name, server: profile.server || '', port: profile.port || '3306', database: profile.database || '', user: profile.user || '', password: profile.password || '' });
+                }
+            };
+
+            const handleUpdateProfile = async () => {
+                const profile = savedConnections.find(c => c.id === selectedProfileId);
+                if (!profile) return;
+                const updated = { ...profile, engine: sqlEngine, ...sqlForm, port: parseInt(sqlForm.port) || 3306 };
+                await window.nexusAPI.saveConnection(updated);
+                addToast('Credenciales actualizadas correctamente', 'success');
+                setIsEditingProfile(false); // Vuelve a ocultar los campos
+                loadSavedConnections();
+            };
+
+            const handleConfirmSaveProfile = async () => {
+                if (!savePrompt.tempName.trim()) return addToast('El nombre del perfil es obligatorio', 'warning');
+                setLoading(true);
+                try {
+                    const newProfile = { name: savePrompt.tempName, engine: sqlEngine, server: sqlForm.server, port: parseInt(sqlForm.port) || 3306, database: sqlForm.database, user: sqlForm.user, password: sqlForm.password };
+                    const res = await window.nexusAPI.saveConnection(newProfile);
+
+                    if (res && res.success === false) throw new Error(res.error);
+
+                    refreshPools(); // <-- NUEVO: SINCRONIZA EL SUICHE VISUAL CON EL NOMBRE
+                    addToast(`Perfil "${savePrompt.tempName}" guardado`, 'success');
+                    setSavePrompt({ open: false, tempName: '' });
+
+                    const conns = await window.nexusAPI.getConnections();
+                    setSavedConnections(conns);
+                    const created = conns.find(c => c.name === savePrompt.tempName);
+                    if (created) setSelectedProfileId(created.id);
+                } catch (err) {
+                    console.error("Error detallado:", err);
+                    addToast('Error al guardar: ' + (err.message || ''), 'error');
+                }
+                setLoading(false);
+            };
+
+            const handleDeleteProfile = () => {
+                const profile = savedConnections.find(c => c.id === selectedProfileId);
+                if (!profile) return;
+                confirmAction({
+                    title: 'Eliminar Perfil',
+                    message: `¿Estás seguro de eliminar el perfil "${profile.name}"?\nSe borrará de forma permanente y sin dejar rastro en el equipo.`,
+                    type: 'danger', confirmText: 'Eliminar',
+                    onConfirm: async () => {
+                        await window.nexusAPI.deleteConnection(profile.id);
+                        addToast('Perfil eliminado sin dejar rastro', 'info');
+                        setSelectedProfileId('');
+                        setSqlForm({ name: '', server: '', port: '3306', database: '', user: '', password: '' });
+                        loadSavedConnections();
+                    }
+                });
+            };
 
             // Manejador de Conexión SQL
             const handleSqlConnect = async (e) => {
                 e.preventDefault();
                 setLoading(true);
                 try {
-                    // Construimos la configuración base (sin obligar la BBDD)
-                    const dbConfig = {
-                        engine: sqlEngine,
-                        server: sqlForm.server,
-                        port: parseInt(sqlForm.port) || 3306,
-                        user: sqlForm.user,
-                        password: sqlForm.password,
-                        options: { encrypt: false, trustServerCertificate: true }
-                    };
+                    let result;
 
-                    if (sqlForm.database && sqlForm.database.trim() !== '') {
-                        dbConfig.database = sqlForm.database.trim();
+                    // Si seleccionamos un perfil de la bóveda, el backend conecta usando la clave cifrada
+                    if (selectedProfileId && !isEditingProfile) {
+                        result = await window.nexusAPI.connectFromProfile(selectedProfileId);
+                    } else {
+                        // Conexión manual o perfil en edición
+                        const dbConfig = {
+                            engine: sqlEngine,
+                            server: sqlForm.server,
+                            port: parseInt(sqlForm.port) || 3306,
+                            user: sqlForm.user,
+                            password: sqlForm.password,
+                            options: { encrypt: false, trustServerCertificate: true }
+                        };
+
+                        if (sqlForm.database && sqlForm.database.trim() !== '') {
+                            dbConfig.database = sqlForm.database.trim();
+                        }
+
+                        result = await window.nexusAPI.connectSQL(dbConfig);
                     }
 
-                    const result = await window.nexusAPI.connectSQL(dbConfig);
-
                     if (result.success) {
-                        setSqlConnected(true);
+                        refreshPools();
                         addToast('Conexión SQL establecida exitosamente', 'success');
+
+                        // Si no hay perfil seleccionado, lanzamos el modal para guardarlo
+                        if (!selectedProfileId) setSavePrompt({ open: true, tempName: '' });
                     } else {
-                        setSqlConnected(false);
                         addToast('Error SQL: ' + result.error, 'error');
                     }
                 } catch (err) {
@@ -723,9 +816,10 @@
             };
 
             // Manejador de Desconexión
-            const handleSqlDisconnect = () => {
-                setSqlConnected(false);
-                setSqlForm({ server: '', port: '3306', database: '', user: '', password: '' });
+            const handleSqlDisconnect = async (poolId) => {
+                await window.nexusAPI.disconnectPool(poolId);
+                refreshPools();
+                setSqlForm({ name: '', server: '', port: '3306', database: '', user: '', password: '' });
                 addToast('Desconectado', 'info');
             };
 
@@ -957,62 +1051,134 @@
                         {activeTab === 'database' && (
                             <div className="bg-white p-8 rounded-xl shadow-lg max-w-2xl mx-auto border-t-4 border-blue-600 slide-up">
                                 <div className="text-center mb-8">
-                                    <div className={`w-20 h-20 mx-auto rounded-full flex items-center justify-center mb-4 shadow-inner transition-colors ${sqlConnected ? 'bg-green-100 text-green-600' : 'bg-slate-100 text-slate-400'}`}>
+                                    <div className={`w-20 h-20 mx-auto rounded-full flex items-center justify-center mb-4 shadow-inner transition-colors ${activePools.length > 0 ? 'bg-green-100 text-green-600' : 'bg-slate-100 text-slate-400'}`}>
                                         <Icon name="server" size={40} />
                                     </div>
-                                    <h3 className="text-2xl font-bold text-gray-800">{sqlEngine === 'sqlserver' ? 'Motor SQL Server' : 'Motor MySQL'}</h3>
-                                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', margin: '0.75rem 0' }}>
-                                        <button type="button" onClick={() => { setSqlEngine('sqlserver'); setSqlConnected(false); }} style={{ padding: '6px 18px', borderRadius: '8px', fontWeight: 'bold', fontSize: '0.85rem', border: '2px solid #3b82f6', background: sqlEngine === 'sqlserver' ? '#3b82f6' : 'white', color: sqlEngine === 'sqlserver' ? 'white' : '#3b82f6', cursor: 'pointer' }}>SQL Server</button>
-                                        <button type="button" onClick={() => { setSqlEngine('mysql'); setSqlConnected(false); }} style={{ padding: '6px 18px', borderRadius: '8px', fontWeight: 'bold', fontSize: '0.85rem', border: '2px solid #f97316', background: sqlEngine === 'mysql' ? '#f97316' : 'white', color: sqlEngine === 'mysql' ? 'white' : '#f97316', cursor: 'pointer' }}>MySQL</button>
+                                    <h3 className="text-2xl font-bold text-gray-800 mb-4">{sqlEngine === 'sqlserver' ? 'Motor SQL Server' : 'Motor MySQL'}</h3>
+
+                                    {/* SELECTOR DE PERFILES KEEPASS */}
+                                    <div className="flex items-center justify-center gap-2 mb-4 p-3 bg-gray-50 rounded-lg border border-gray-200 max-w-md mx-auto transition-all">
+                                        <Icon name="user" size={18} className="text-gray-400" />
+                                        <select disabled={activePools.length >= 2} value={selectedProfileId} onChange={(e) => handleSelectProfile(e.target.value)} className="flex-1 border-none bg-transparent font-bold text-gray-700 focus:ring-0 cursor-pointer outline-none disabled:opacity-50">
+                                            <option value="">-- Conexión Nueva / Manual --</option>
+                                            {savedConnections.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                                        </select>
+                                        {selectedProfileId && activePools.length < 2 && (
+                                            <div className="flex gap-1 border-l border-gray-300 pl-2">
+                                                <button onClick={handleDeleteProfile} className="p-1.5 text-red-600 hover:bg-red-100 rounded" title="Eliminar este perfil sin dejar rastro"><Icon name="trash" size={16} /></button>
+                                            </div>
+                                        )}
                                     </div>
-                                    <p className="text-sm text-gray-500 mt-2">
-                                        Las credenciales se guardan <strong>solo en la RAM</strong>. Al cerrar la aplicación, la conexión se destruye por seguridad.
-                                    </p>
+
+                                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', margin: '0.75rem 0' }}>
+                                        <button disabled={activePools.length >= 2 || selectedProfileId !== ''} type="button" onClick={() => setSqlEngine('sqlserver')} style={{ padding: '6px 18px', borderRadius: '8px', fontWeight: 'bold', fontSize: '0.85rem', border: '2px solid #3b82f6', background: sqlEngine === 'sqlserver' ? '#3b82f6' : 'white', color: sqlEngine === 'sqlserver' ? 'white' : '#3b82f6', cursor: (activePools.length >= 2 || selectedProfileId !== '') ? 'not-allowed' : 'pointer', opacity: (activePools.length >= 2 || selectedProfileId !== '') ? 0.5 : 1 }}>SQL Server</button>
+                                        <button disabled={activePools.length >= 2 || selectedProfileId !== ''} type="button" onClick={() => setSqlEngine('mysql')} style={{ padding: '6px 18px', borderRadius: '8px', fontWeight: 'bold', fontSize: '0.85rem', border: '2px solid #f97316', background: sqlEngine === 'mysql' ? '#f97316' : 'white', color: sqlEngine === 'mysql' ? 'white' : '#f97316', cursor: (activePools.length >= 2 || selectedProfileId !== '') ? 'not-allowed' : 'pointer', opacity: (activePools.length >= 2 || selectedProfileId !== '') ? 0.5 : 1 }}>MySQL</button>
+                                    </div>
                                 </div>
 
-                                {sqlConnected ? (
-                                    <div className="bg-green-50 border border-green-200 rounded-lg p-6 text-center slide-up">
-                                        <h4 className="text-green-800 font-bold text-lg mb-2 flex items-center justify-center gap-2">
-                                            <Icon name="check" size={24} /> Conectado a {sqlForm.server}
-                                        </h4>
-                                        <p className="text-green-600 text-sm mb-6">Los módulos dinámicos ya pueden realizar consultas a la base de datos <strong>{sqlForm.database}</strong>.</p>
-                                        <button onClick={handleSqlDisconnect} className="bg-white border-2 border-green-600 text-green-700 px-6 py-2 rounded-lg font-bold hover:bg-green-50 transition-colors shadow-sm">
-                                            Desconectar Motor
-                                        </button>
+                                {/* MODAL GUARDAR PERFIL NUEVO */}
+                                {savePrompt.open && (
+                                    <div className="absolute inset-0 z-50 flex items-center justify-center bg-white/95 backdrop-blur-sm p-6 fade-in rounded-xl">
+                                        <div className="bg-white border border-blue-200 shadow-xl rounded-xl p-6 w-full max-w-sm text-center">
+                                            <h3 className="font-bold text-gray-800 mb-2">¿Guardar credenciales?</h3>
+                                            <p className="text-xs text-gray-500 mb-4">Crea un perfil para no escribirlas de nuevo.</p>
+                                            <input autoFocus type="text" placeholder="Ej: Darwin_Vetec" value={savePrompt.tempName} onChange={e => setSavePrompt({ ...savePrompt, tempName: e.target.value })} className="w-full border-2 border-gray-200 rounded px-3 py-2 mb-4 text-center font-bold outline-none focus:border-blue-500" />
+                                            <div className="flex gap-2">
+                                                <button onClick={() => setSavePrompt({ open: false, tempName: '' })} className="flex-1 bg-gray-100 text-gray-600 px-3 py-2 rounded font-bold hover:bg-gray-200">No guardar</button>
+                                                <button onClick={handleConfirmSaveProfile} className="flex-1 bg-blue-600 text-white px-3 py-2 rounded font-bold hover:bg-blue-700">Guardar</button>
+                                            </div>
+                                        </div>
                                     </div>
-                                ) : (
-                                    <form onSubmit={handleSqlConnect} className="space-y-4">
-                                        <div className="grid grid-cols-2 gap-4">
-                                            <div>
-                                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Servidor (IP o Host)</label>
-                                                <input type="text" required value={sqlForm.server} onChange={e => setSqlForm({ ...sqlForm, server: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow" placeholder="ej: 192.168.1.100" />
-                                                {sqlEngine === 'mysql' && (
-                                                    <div style={{ marginTop: '0.75rem' }}>
-                                                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Puerto</label>
-                                                        <input type="number" value={sqlForm.port} onChange={e => setSqlForm({ ...sqlForm, port: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-orange-500 outline-none transition-shadow" placeholder="3306" />
+                                )}
+
+                                {/* PANELES DE CONEXIONES VIVAS (Slots A/B) */}
+                                {activePools.length > 0 && (
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-2 slide-up">
+                                        {activePools.map((pool, idx) => (
+                                            <div key={pool.id} className="bg-green-50 border border-green-200 rounded-lg p-4 text-center shadow-sm relative overflow-hidden">
+                                                <div className="absolute top-0 left-0 w-full h-1 bg-green-500"></div>
+                                                <h4 className="text-green-800 font-bold text-md mb-1 flex items-center justify-center gap-1">
+                                                    <Icon name="check" size={18} /> Slot {idx === 0 ? 'A' : 'B'}
+                                                </h4>
+                                                <p className="text-green-700 text-sm font-bold mb-1 truncate" title={pool.name}>{pool.name}</p>
+                                                <p className="text-green-600 text-xs mb-3 font-mono">{pool.engine.toUpperCase()}</p>
+                                                <button onClick={() => handleSqlDisconnect(pool.id)} className="bg-white border border-green-600 text-green-700 px-4 py-1.5 rounded-lg text-xs font-bold hover:bg-green-100 transition-colors shadow-sm">
+                                                    Desconectar Slot
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+
+                                {/* FORMULARIO DE CONEXIÓN */}
+                                {activePools.length < 2 && (
+                                    <div className={`slide-up ${activePools.length > 0 ? 'border-t border-gray-200 pt-6 mt-4' : ''}`}>
+                                        {activePools.length > 0 && <h4 className="text-gray-500 font-bold mb-4 text-center text-sm uppercase tracking-wider">Conectar Motor a Slot {activePools.length === 0 ? 'A' : 'B'}</h4>}
+                                        {selectedProfileId && !isEditingProfile ? (
+                                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-6 text-center mb-4 shadow-sm">
+                                                <Icon name="shield" size={36} className="text-blue-500 mx-auto mb-3" />
+                                                <h4 className="text-blue-900 font-bold text-lg mb-1">Credenciales Seguras</h4>
+                                                <p className="text-blue-600 text-sm mb-5">El motor utilizará este perfil de forma invisible.</p>
+                                                <div className="flex gap-3 justify-center">
+                                                    <button onClick={() => setIsEditingProfile(true)} className="bg-white border border-blue-300 text-blue-700 px-4 py-2 rounded font-bold hover:bg-blue-100 transition-colors text-sm flex items-center gap-2 shadow-sm">
+                                                        <Icon name="edit" size={16} /> Modificar
+                                                    </button>
+                                                    <button onClick={handleSqlConnect} disabled={loading} className="bg-blue-600 text-white px-8 py-2 rounded font-bold hover:bg-blue-700 transition-colors shadow-md disabled:bg-blue-400 flex items-center gap-2">
+                                                        {loading ? <div className="spinner" style={{ width: 16, height: 16, borderTopColor: 'white' }}></div> : <Icon name="zap" size={16} />}
+                                                        Conectar Motor
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <form onSubmit={handleSqlConnect} className={`space-y-4 ${isEditingProfile ? 'bg-white border border-orange-200 p-5 rounded-lg shadow-inner' : ''}`}>
+                                                {isEditingProfile && (
+                                                    <div className="flex justify-between items-center mb-3 border-b border-orange-100 pb-2">
+                                                        <span className="text-sm font-bold text-orange-600 flex items-center gap-1"><Icon name="edit" size={16} /> Editando Perfil</span>
+                                                        <button type="button" onClick={() => setIsEditingProfile(false)} className="text-gray-400 hover:text-gray-600"><Icon name="x" size={18} /></button>
                                                     </div>
                                                 )}
-                                            </div>
-                                            <div>
-                                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Base de Datos <span className="text-gray-400 font-normal">(Opcional)</span></label>
-                                                <input type="text" value={sqlForm.database} onChange={e => setSqlForm({ ...sqlForm, database: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow" placeholder="Vacío = Conexión a raíz (master)" />
-                                            </div>
-                                        </div>
-                                        <div className="grid grid-cols-2 gap-4">
-                                            <div>
-                                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Usuario</label>
-                                                <input type="text" required value={sqlForm.user} onChange={e => setSqlForm({ ...sqlForm, user: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow" placeholder="sa" />
-                                            </div>
-                                            <div>
-                                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Contraseña</label>
-                                                <input type="password" required value={sqlForm.password} onChange={e => setSqlForm({ ...sqlForm, password: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow" placeholder="••••••••" />
-                                            </div>
-                                        </div>
-                                        <button type="submit" disabled={loading} className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 transition-colors mt-4 flex justify-center gap-2 items-center shadow-md disabled:bg-blue-400">
-                                            {loading ? <div className="spinner" style={{ width: 20, height: 20, borderTopColor: 'white' }}></div> : <Icon name="zap" size={20} />}
-                                            {loading ? 'Conectando...' : 'Conectar al Servidor SQL'}
-                                        </button>
-                                    </form>
+                                                <div className="grid grid-cols-2 gap-4">
+                                                    <div>
+                                                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Servidor (IP o Host)</label>
+                                                        <input type="text" required value={sqlForm.server} onChange={e => setSqlForm({ ...sqlForm, server: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow" placeholder="ej: 192.168.1.100" />
+                                                        {sqlEngine === 'mysql' && (
+                                                            <div style={{ marginTop: '0.75rem' }}>
+                                                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Puerto</label>
+                                                                <input type="number" value={sqlForm.port} onChange={e => setSqlForm({ ...sqlForm, port: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-orange-500 outline-none transition-shadow" placeholder="3306" />
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Base de Datos <span className="text-gray-400 font-normal">(Opcional)</span></label>
+                                                        <input type="text" value={sqlForm.database} onChange={e => setSqlForm({ ...sqlForm, database: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow" placeholder="Vacío = Conexión a raíz (master)" />
+                                                    </div>
+                                                </div>
+                                                <div className="grid grid-cols-2 gap-4">
+                                                    <div>
+                                                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Usuario</label>
+                                                        <input type="text" required value={sqlForm.user} onChange={e => setSqlForm({ ...sqlForm, user: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow" placeholder="sa o root" />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Contraseña</label>
+                                                        <input type="password" required value={sqlForm.password} onChange={e => setSqlForm({ ...sqlForm, password: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow" placeholder="••••••••" />
+                                                    </div>
+                                                </div>
+
+                                                {isEditingProfile ? (
+                                                    <div className="flex gap-3 mt-5">
+                                                        <button type="button" onClick={handleUpdateProfile} className="flex-1 bg-green-600 text-white font-bold py-2.5 rounded-lg hover:bg-green-700 transition-colors shadow-md flex justify-center gap-2 items-center">
+                                                            <Icon name="save" size={18} /> Guardar Cambios
+                                                        </button>
+                                                    </div>
+                                                ) : (
+                                                    <button type="submit" disabled={loading} className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 transition-colors mt-4 flex justify-center gap-2 items-center shadow-md disabled:bg-blue-400">
+                                                        {loading ? <div className="spinner" style={{ width: 20, height: 20, borderTopColor: 'white' }}></div> : <Icon name="zap" size={20} />}
+                                                        {loading ? 'Conectando...' : 'Conectar al Servidor SQL'}
+                                                    </button>
+                                                )}
+                                            </form>
+                                        )}
+                                    </div>
                                 )}
                             </div>
                         )}
@@ -1385,6 +1551,20 @@
             const [toasts, setToasts] = useState([]);
             const [dialog, setDialog] = useState({ isOpen: false, config: {} });
 
+            // --- NUEVO: ESTADOS GLOBALES DE CONEXIÓN ---
+            const [activePools, setActivePools] = useState([]);
+            const [currentPoolId, setCurrentPoolId] = useState(null);
+
+            const refreshPools = async () => {
+                const res = await window.nexusAPI.getActivePools();
+                setActivePools(res.pools);
+                setCurrentPoolId(res.currentId);
+            };
+
+            useEffect(() => {
+                refreshPools();
+            }, []);
+
             const addToast = (msg, type = 'info') => { const id = Date.now(); setToasts(p => [...p, { id, message: msg, type }]); };
             const removeToast = (id) => setToasts(p => p.filter(t => t.id !== id));
             const confirmAction = (config) => setDialog({ isOpen: true, config });
@@ -1399,6 +1579,56 @@
                 utils: { addToast, readFile, confirmAction },
                 db: dbService,
                 goHome: () => setView('home')
+            };
+
+            // --- NUEVO: COMPONENTE SUICHE GLOBAL (MODERNO) ---
+            const ConnectionSwitcher = () => {
+                if (activePools.length === 0) return null;
+                return (
+                    <div className="flex items-center bg-gray-100 p-1 rounded-lg border border-gray-200 shadow-inner">
+                        <Icon name="database" size={14} className="text-gray-400 ml-2 mr-2" />
+
+                        {/* CONTENEDOR DEL SUICHE (Píldora) */}
+                        <div className="flex items-center relative">
+                            {activePools.map((pool) => {
+                                const isActive = pool.id === currentPoolId;
+                                return (
+                                    <button
+                                        key={pool.id}
+                                        onClick={async () => {
+                                            if (!isActive) {
+                                                await window.nexusAPI.switchPool(pool.id);
+                                                refreshPools();
+                                            }
+                                        }}
+                                        className={`px-3 py-1.5 text-xs font-bold rounded-md transition-all duration-300 ease-in-out flex items-center gap-1.5 ${isActive
+                                            ? 'bg-white text-indigo-700 shadow-sm ring-1 ring-gray-200/50'
+                                            : 'text-gray-500 hover:text-gray-800'
+                                            }`}
+                                        title={`Motor: ${pool.engine.toUpperCase()}`}
+                                    >
+                                        {isActive && <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block shadow-sm"></span>}
+                                        <span className="truncate max-w-[120px]">{pool.name}</span>
+                                    </button>
+                                );
+                            })}
+                        </div>
+
+                        <div className="w-px h-4 bg-gray-300 mx-2"></div>
+
+                        <button
+                            onClick={async () => {
+                                await window.nexusAPI.disconnectPool(currentPoolId);
+                                refreshPools();
+                                addToast('Conexión cerrada', 'info');
+                            }}
+                            className="text-red-400 hover:text-red-600 p-1 rounded hover:bg-red-50 transition-colors mr-1"
+                            title="Desconectar Conexión Activa"
+                        >
+                            <Icon name="x" size={14} />
+                        </button>
+                    </div>
+                );
             };
 
             return (
@@ -1418,13 +1648,17 @@
                         />
                     )}
 
-                    {view === 'admin' && <AdminModule addToast={addToast} onNavigateHome={() => setView('home')} confirmAction={confirmAction} />}
+                    {view === 'admin' && <AdminModule addToast={addToast} onNavigateHome={() => setView('home')} confirmAction={confirmAction} activePools={activePools} refreshPools={refreshPools} />}
 
 
                     {view === 'dynamic_runner' && (
                         <div className="slide-up min-h-screen bg-gray-50">
                             <div className="bg-white border-b px-6 py-3 flex justify-between items-center shadow-sm sticky top-0 z-40">
                                 <span className="text-xs font-bold text-indigo-600 uppercase tracking-wider">Módulo Externo</span>
+
+                                {/* AQUI INYECTAMOS EL SUICHE INVISIBLE AL MÓDULO */}
+                                <ConnectionSwitcher />
+
                                 <button onClick={() => setView('home')} className="text-sm text-gray-600 hover:text-gray-900 flex items-center gap-1">
                                     <Icon name="x" size={16} /> Cerrar Módulo
                                 </button>

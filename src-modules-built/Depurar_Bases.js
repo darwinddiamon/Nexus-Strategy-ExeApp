@@ -514,6 +514,23 @@ window.NexusActiveModule = ({
         .nav-buttons { display: flex; justify-content: space-between; margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--border); }
         .checkbox-group { display: flex; align-items: center; gap: 0.5rem; margin: 0.5rem 0; }
         .checkbox { width: 1.2rem; height: 1.2rem; accent-color: var(--primary); cursor: pointer; }
+
+        /* Tooltip de columna */
+        .col-tooltip-wrap { position: relative; display: inline-block; }
+        .col-tooltip-wrap .col-tooltip {
+            visibility: hidden; opacity: 0; pointer-events: none;
+            position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+            background: #1f2937; color: #f9fafb; font-size: 0.72rem; font-family: system-ui, sans-serif;
+            white-space: pre-wrap; min-width: 200px; max-width: 320px; padding: 0.5rem 0.75rem;
+            border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 10000;
+            transition: opacity 0.15s ease, visibility 0.15s ease;
+            line-height: 1.5;
+        }
+        .col-tooltip-wrap:hover .col-tooltip { visibility: visible; opacity: 1; }
+        .col-tooltip-wrap .col-tooltip::after {
+            content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+            border: 5px solid transparent; border-top-color: #1f2937;
+        }
     `;
 
   // Initial campaigns data (Vacío porque ahora cargan de Nexus)
@@ -1070,6 +1087,397 @@ window.NexusActiveModule = ({
   }
   // --- FIN LÓGICA DE CRITERIOS ---
 
+  // ========================================================================
+  // COMPONENTE: Panel de Diagnóstico de Conflictos de Estructura
+  // ========================================================================
+  const PanelDiagnosticoConflicto = ({
+    conflictState,
+    rawFiles,
+    onMapear,
+    onCancelar,
+    guideFileName,
+    onChangeGuide
+  }) => {
+    const {
+      baseColumns,
+      mismatchedFiles,
+      matchedFiles
+    } = conflictState;
+    const allFiles = [...(matchedFiles || []), ...(mismatchedFiles || [])];
+    const totalFiles = allFiles.length;
+
+    // --- Mapa de presencia: col → Set de nombres de archivos que la tienen ---
+    const colPresenceMap = {};
+    allFiles.forEach(f => {
+      f.columns.forEach(col => {
+        if (!colPresenceMap[col]) colPresenceMap[col] = new Set();
+        colPresenceMap[col].add(f.name);
+      });
+    });
+    const colsEnTodos = Object.entries(colPresenceMap).filter(([, files]) => files.size === totalFiles).map(([col]) => col).sort();
+    const colsFaltantes = baseColumns.filter(col => colPresenceMap[col] && colPresenceMap[col].size < totalFiles).map(col => ({
+      col,
+      falta_en: allFiles.filter(f => !f.columns.includes(col)).map(f => f.name)
+    }));
+    const colsExtras = Object.entries(colPresenceMap).filter(([col]) => !baseColumns.includes(col)).map(([col, files]) => ({
+      col,
+      presente_en: Array.from(files)
+    }));
+    const [expandido, setExpandido] = useState(false);
+
+    // Helper: genera texto del tooltip para una columna
+    const tooltipText = col => {
+      const enTodos = colPresenceMap[col] && colPresenceMap[col].size === totalFiles;
+      if (enTodos) return `✅ Presente en todos los archivos (${totalFiles}/${totalFiles})`;
+      const presentes = colPresenceMap[col] ? Array.from(colPresenceMap[col]) : [];
+      const ausentes = allFiles.map(f => f.name).filter(n => !presentes.includes(n));
+      const lines = [`📊 Presente en ${presentes.length}/${totalFiles} archivos`, presentes.length ? `\n✓ Con esta col:\n${presentes.map(n => '  · ' + n.replace(/\.[^.]+$/, '')).join('\n')}` : '', ausentes.length ? `\n✗ Sin esta col:\n${ausentes.map(n => '  · ' + n.replace(/\.[^.]+$/, '')).join('\n')}` : ''];
+      return lines.filter(Boolean).join('');
+    };
+
+    // Badge con tooltip
+    const ColBadge = ({
+      col,
+      bgColor,
+      textColor
+    }) => /*#__PURE__*/React.createElement("span", {
+      className: "col-tooltip-wrap"
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        background: bgColor,
+        color: textColor,
+        fontSize: '0.72rem',
+        fontFamily: 'monospace',
+        padding: '2px 6px',
+        borderRadius: 4,
+        cursor: 'help'
+      }
+    }, col), /*#__PURE__*/React.createElement("span", {
+      className: "col-tooltip"
+    }, tooltipText(col)));
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        border: '2px solid #f59e0b',
+        borderRadius: 12,
+        overflow: 'hidden',
+        marginBottom: '1rem'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        background: '#fffbeb',
+        padding: '1rem 1.25rem',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 8,
+        flexWrap: 'wrap'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: '1.2rem'
+      }
+    }, "\u26A0\uFE0F"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontWeight: 800,
+        color: '#b45309',
+        fontSize: '0.95rem'
+      }
+    }, "Estructuras Diferentes Detectadas"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        color: '#92400e',
+        fontSize: '0.78rem',
+        marginTop: 2
+      }
+    }, mismatchedFiles.length, " de ", totalFiles, " archivos difieren \xB7 ", colsEnTodos.length, " col. comunes \xB7 ", colsFaltantes.length + colsExtras.length, " col. con diferencias"))), /*#__PURE__*/React.createElement("button", {
+      onClick: () => setExpandido(p => !p),
+      style: {
+        background: 'white',
+        border: '1px solid #f59e0b',
+        borderRadius: 6,
+        padding: '4px 10px',
+        fontSize: '0.75rem',
+        fontWeight: 700,
+        color: '#b45309',
+        cursor: 'pointer'
+      }
+    }, expandido ? '▲ Ocultar análisis' : '▼ Ver análisis detallado')), /*#__PURE__*/React.createElement("div", {
+      style: {
+        background: '#fef9c3',
+        borderTop: '1px solid #fde68a',
+        padding: '0.65rem 1.25rem',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        flexWrap: 'wrap'
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: '0.8rem',
+        fontWeight: 700,
+        color: '#92400e'
+      }
+    }, "\uD83D\uDCD0 Archivo gu\xEDa:"), /*#__PURE__*/React.createElement("select", {
+      style: {
+        border: '1px solid #f59e0b',
+        borderRadius: 6,
+        padding: '3px 8px',
+        fontSize: '0.78rem',
+        background: 'white',
+        color: '#374151',
+        fontWeight: 600,
+        cursor: 'pointer'
+      },
+      value: guideFileName || '',
+      onChange: e => onChangeGuide(e.target.value || null)
+    }, /*#__PURE__*/React.createElement("option", {
+      value: ""
+    }, "\uD83D\uDD22 Autom\xE1tico (estructura mayoritaria)"), allFiles.map(f => /*#__PURE__*/React.createElement("option", {
+      key: f.name,
+      value: f.name
+    }, f.name.replace(/\.[^.]+$/, ''), " \u2014 ", f.columns.length, " cols"))), guideFileName ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: '0.72rem',
+        color: '#b45309'
+      }
+    }, "Comparando todo vs. este archivo") : /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: '0.72rem',
+        color: '#92400e'
+      }
+    }, "El template es la estructura que m\xE1s se repite entre los archivos")), expandido && /*#__PURE__*/React.createElement("div", {
+      style: {
+        background: 'white',
+        padding: '1.25rem',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '1rem'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: '0.8rem',
+        color: '#6b7280',
+        background: '#f8fafc',
+        padding: '0.5rem 0.75rem',
+        borderRadius: 6,
+        border: '1px solid #e2e8f0'
+      }
+    }, "\uD83D\uDCD0 ", /*#__PURE__*/React.createElement("strong", null, "Template activo:"), " ", guideFileName ? guideFileName.replace(/\.[^.]+$/, '') : 'Estructura mayoritaria', " \u2014 ", baseColumns.length, " columnas", /*#__PURE__*/React.createElement("span", {
+      style: {
+        marginLeft: 8,
+        color: '#9ca3af',
+        fontSize: '0.7rem'
+      }
+    }, "(pasa el cursor sobre cualquier columna para ver en qu\xE9 archivos est\xE1 presente)")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+        gap: '0.75rem'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        border: '1px solid #d1fae5',
+        borderRadius: 8,
+        overflow: 'hidden'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        background: '#ecfdf5',
+        padding: '0.5rem 0.75rem',
+        fontWeight: 700,
+        fontSize: '0.8rem',
+        color: '#065f46'
+      }
+    }, "\u2705 Comunes en todos (", colsEnTodos.length, ")"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        padding: '0.5rem 0.75rem',
+        maxHeight: 130,
+        overflowY: 'auto',
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 4
+      }
+    }, colsEnTodos.length === 0 ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: '#9ca3af',
+        fontSize: '0.75rem'
+      }
+    }, "Ninguna columna es igual en todos") : colsEnTodos.map(c => /*#__PURE__*/React.createElement(ColBadge, {
+      key: c,
+      col: c,
+      bgColor: "#d1fae5",
+      textColor: "#065f46"
+    })))), /*#__PURE__*/React.createElement("div", {
+      style: {
+        border: '1px solid #fde68a',
+        borderRadius: 8,
+        overflow: 'hidden'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        background: '#fef9c3',
+        padding: '0.5rem 0.75rem',
+        fontWeight: 700,
+        fontSize: '0.8rem',
+        color: '#92400e'
+      }
+    }, "\u26A0\uFE0F Del template, ausentes en algunos (", colsFaltantes.length, ")"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        padding: '0.5rem 0.75rem',
+        maxHeight: 130,
+        overflowY: 'auto',
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 4
+      }
+    }, colsFaltantes.length === 0 ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: '#9ca3af',
+        fontSize: '0.75rem'
+      }
+    }, "Ninguna falta") : colsFaltantes.map(({
+      col
+    }) => /*#__PURE__*/React.createElement(ColBadge, {
+      key: col,
+      col: col,
+      bgColor: "#fde68a",
+      textColor: "#92400e"
+    })))), /*#__PURE__*/React.createElement("div", {
+      style: {
+        border: '1px solid #fecaca',
+        borderRadius: 8,
+        overflow: 'hidden'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        background: '#fef2f2',
+        padding: '0.5rem 0.75rem',
+        fontWeight: 700,
+        fontSize: '0.8rem',
+        color: '#991b1b'
+      }
+    }, "\uD83D\uDD34 Extras (fuera del template) (", colsExtras.length, ")"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        padding: '0.5rem 0.75rem',
+        maxHeight: 130,
+        overflowY: 'auto',
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 4
+      }
+    }, colsExtras.length === 0 ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: '#9ca3af',
+        fontSize: '0.75rem'
+      }
+    }, "Sin columnas extra") : colsExtras.map(({
+      col
+    }) => /*#__PURE__*/React.createElement(ColBadge, {
+      key: col,
+      col: col,
+      bgColor: "#fecaca",
+      textColor: "#991b1b"
+    }))))), mismatchedFiles.length > 0 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontWeight: 700,
+        fontSize: '0.82rem',
+        color: '#374151',
+        marginBottom: 6
+      }
+    }, "\uD83D\uDDC2\uFE0F Detalle por archivo conflictivo:"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6
+      }
+    }, mismatchedFiles.map((f, idx) => {
+      const faltanEnEste = baseColumns.filter(c => !f.columns.includes(c));
+      const sobranEnEste = f.columns.filter(c => !baseColumns.includes(c));
+      return /*#__PURE__*/React.createElement("div", {
+        key: idx,
+        style: {
+          background: '#fef2f2',
+          border: '1px solid #fecaca',
+          borderRadius: 8,
+          padding: '0.6rem 0.85rem'
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontWeight: 700,
+          fontSize: '0.78rem',
+          color: '#991b1b',
+          marginBottom: 4
+        }
+      }, "\u26A0\uFE0F ", f.name), /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: 'flex',
+          gap: '1rem',
+          flexWrap: 'wrap'
+        }
+      }, faltanEnEste.length > 0 && /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: 'flex',
+          gap: 3,
+          alignItems: 'center',
+          flexWrap: 'wrap'
+        }
+      }, /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontSize: '0.7rem',
+          color: '#6b7280'
+        }
+      }, "Faltan: "), faltanEnEste.map(c => /*#__PURE__*/React.createElement(ColBadge, {
+        key: c,
+        col: c,
+        bgColor: "#fde68a",
+        textColor: "#92400e"
+      }))), sobranEnEste.length > 0 && /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: 'flex',
+          gap: 3,
+          alignItems: 'center',
+          flexWrap: 'wrap'
+        }
+      }, /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontSize: '0.7rem',
+          color: '#6b7280'
+        }
+      }, "Sobran: "), sobranEnEste.map(c => /*#__PURE__*/React.createElement(ColBadge, {
+        key: c,
+        col: c,
+        bgColor: "#fecaca",
+        textColor: "#991b1b"
+      })))));
+    })))), /*#__PURE__*/React.createElement("div", {
+      style: {
+        background: '#fffbeb',
+        borderTop: '1px solid #fde68a',
+        padding: '0.75rem 1.25rem',
+        display: 'flex',
+        gap: '0.5rem',
+        flexWrap: 'wrap'
+      }
+    }, /*#__PURE__*/React.createElement("button", {
+      className: "btn btn-primary",
+      onClick: onMapear,
+      style: {
+        fontSize: '0.85rem'
+      }
+    }, "\uD83D\uDEE0\uFE0F Mapear y Homologar"), /*#__PURE__*/React.createElement("button", {
+      className: "btn btn-error",
+      onClick: onCancelar,
+      style: {
+        fontSize: '0.85rem'
+      }
+    }, "\u274C Cancelar Carga")));
+  };
+
   // Step 1: File Upload (MEJORADO: Filtro de Encabezados y Filas Vacías)
   function Step1FileUpload({
     appData,
@@ -1094,6 +1502,8 @@ window.NexusActiveModule = ({
       matchedFiles: []
     });
     const [showMappingModal, setShowMappingModal] = useState(false);
+    // Archivo guía: nombre del archivo cuya estructura se usa como plantilla
+    const [guideFileName, setGuideFileName] = useState(null);
     // ----------------------------------------------
 
     // --- ESTADOS PARA MULTI-HOJAS Y ARCHIVOS PROTEGIDOS ---
@@ -1163,9 +1573,6 @@ window.NexusActiveModule = ({
         setTimeout(async () => {
           setLoading(true);
           let parsedFiles = [];
-          let templateColumns = null;
-          let matchedFiles = [];
-          let mismatchedFiles = [];
           let blocked = [];
           for (const file of filesToProcess) {
             try {
@@ -1188,8 +1595,7 @@ window.NexusActiveModule = ({
               } else {
                 result = await leerExcelConHojas(file, newSelections[file.name] || null, passwords[file.name] || null);
               }
-              if (result.multiSheet) continue; // No debería pasar yapa
-
+              if (result.multiSheet) continue;
               if (result.data && result.data.length > 0) {
                 const fileColumns = result.columns.map(c => String(c).trim().toUpperCase());
                 const upperData = result.data.map(row => {
@@ -1199,20 +1605,12 @@ window.NexusActiveModule = ({
                   });
                   return newRow;
                 });
-                const fileDataObj = {
+                parsedFiles.push({
                   file,
                   name: file.name,
                   columns: fileColumns,
                   data: upperData
-                };
-                parsedFiles.push(fileDataObj);
-                if (!templateColumns) {
-                  templateColumns = fileColumns;
-                  matchedFiles.push(fileDataObj);
-                } else {
-                  const isStructureValid = fileColumns.length === templateColumns.length && fileColumns.every(c => templateColumns.includes(c));
-                  if (isStructureValid) matchedFiles.push(fileDataObj);else mismatchedFiles.push(fileDataObj);
-                }
+                });
               }
             } catch (err) {
               blocked.push({
@@ -1234,10 +1632,15 @@ window.NexusActiveModule = ({
           }
           setRawFiles(parsedFiles);
           setFiles(filesToProcess);
+          const {
+            guideColumns,
+            matchedFiles,
+            mismatchedFiles
+          } = calcularEstructuraGuia(parsedFiles, guideFileName);
           if (mismatchedFiles.length > 0) {
             setConflictState({
               hasConflict: true,
-              baseColumns: templateColumns,
+              baseColumns: guideColumns,
               matchedFiles,
               mismatchedFiles
             });
@@ -1249,7 +1652,7 @@ window.NexusActiveModule = ({
               mismatchedFiles: [],
               matchedFiles: []
             });
-            processAndMergeFiles(parsedFiles, templateColumns, filesToProcess);
+            processAndMergeFiles(parsedFiles, guideColumns, filesToProcess);
           }
         }, 50);
       }
@@ -1274,9 +1677,6 @@ window.NexusActiveModule = ({
         setTimeout(async () => {
           setLoading(true);
           let parsedFiles = [];
-          let templateColumns = null;
-          let matchedFiles = [];
-          let mismatchedFiles = [];
           let multiSheetPending = [];
           let stillBlocked = [];
           for (const file of filesToProcess) {
@@ -1300,20 +1700,12 @@ window.NexusActiveModule = ({
                   });
                   return newRow;
                 });
-                const fileDataObj = {
+                parsedFiles.push({
                   file,
                   name: file.name,
                   columns: fileColumns,
                   data: upperData
-                };
-                parsedFiles.push(fileDataObj);
-                if (!templateColumns) {
-                  templateColumns = fileColumns;
-                  matchedFiles.push(fileDataObj);
-                } else {
-                  const isStructureValid = fileColumns.length === templateColumns.length && fileColumns.every(c => templateColumns.includes(c));
-                  if (isStructureValid) matchedFiles.push(fileDataObj);else mismatchedFiles.push(fileDataObj);
-                }
+                });
               }
             } catch (err) {
               stillBlocked.push({
@@ -1342,10 +1734,15 @@ window.NexusActiveModule = ({
           }
           setRawFiles(parsedFiles);
           setFiles(filesToProcess);
+          const {
+            guideColumns,
+            matchedFiles,
+            mismatchedFiles
+          } = calcularEstructuraGuia(parsedFiles, guideFileName);
           if (mismatchedFiles.length > 0) {
             setConflictState({
               hasConflict: true,
-              baseColumns: templateColumns,
+              baseColumns: guideColumns,
               matchedFiles,
               mismatchedFiles
             });
@@ -1357,7 +1754,7 @@ window.NexusActiveModule = ({
               mismatchedFiles: [],
               matchedFiles: []
             });
-            processAndMergeFiles(parsedFiles, templateColumns, filesToProcess);
+            processAndMergeFiles(parsedFiles, guideColumns, filesToProcess);
           }
         }, 50);
       }
@@ -1530,6 +1927,62 @@ window.NexusActiveModule = ({
       setLoading(false);
     };
 
+    // ====================================================================
+    // UTILIDAD: Determinar estructura guía por mayoría o por elección manual
+    // Devuelve { guideColumns, matchedFiles, mismatchedFiles }
+    // ====================================================================
+    const calcularEstructuraGuia = (parsedFiles, overrideGuideName = null) => {
+      if (parsedFiles.length === 0) return {
+        guideColumns: [],
+        matchedFiles: [],
+        mismatchedFiles: []
+      };
+
+      // Si el usuario fijó un archivo guía manualmente, usarlo directamente
+      if (overrideGuideName) {
+        const guideFile = parsedFiles.find(f => f.name === overrideGuideName);
+        if (guideFile) {
+          const guideCols = guideFile.columns;
+          const matched = [],
+            mismatched = [];
+          parsedFiles.forEach(f => {
+            const ok = f.columns.length === guideCols.length && f.columns.every(c => guideCols.includes(c));
+            (ok ? matched : mismatched).push(f);
+          });
+          return {
+            guideColumns: guideCols,
+            matchedFiles: matched,
+            mismatchedFiles: mismatched
+          };
+        }
+      }
+
+      // Mayoría: encontrar la estructura (fingerprint) más frecuente
+      const fingerprints = {};
+      parsedFiles.forEach(f => {
+        const key = [...f.columns].sort().join('|');
+        if (!fingerprints[key]) fingerprints[key] = {
+          columns: f.columns,
+          count: 0,
+          firstName: f.name
+        };
+        fingerprints[key].count++;
+      });
+      const majority = Object.values(fingerprints).sort((a, b) => b.count - a.count)[0];
+      const guideCols = majority.columns;
+      const matched = [],
+        mismatched = [];
+      parsedFiles.forEach(f => {
+        const ok = f.columns.length === guideCols.length && f.columns.every(c => guideCols.includes(c));
+        (ok ? matched : mismatched).push(f);
+      });
+      return {
+        guideColumns: guideCols,
+        matchedFiles: matched,
+        mismatchedFiles: mismatched
+      };
+    };
+
     // --- NUEVA LÓGICA DE LECTURA (DETECCIÓN DE CONFLICTOS) ---
     const handleFileSelect = async selectedFiles => {
       if (selectedFiles.length > 200) {
@@ -1541,7 +1994,6 @@ window.NexusActiveModule = ({
       try {
         const fileList = Array.from(selectedFiles);
         let parsedFiles = [];
-        let templateColumns = null;
 
         // --- FUNCIÓN DE LECTURA CON SOPORTE MULTI-HOJAS Y CONTRASEÑA ---
         const readFileLocal = async (f, sheetName, password) => {
@@ -1571,14 +2023,10 @@ window.NexusActiveModule = ({
             };
           }
         };
-        let matchedFiles = [];
-        let mismatchedFiles = [];
         let multiSheetPending = [];
         let blocked = [];
         for (const file of fileList) {
           const result = await readFileLocal(file, sheetSelections[file.name] || null, passwords[file.name] || null);
-
-          // Si tiene múltiples hojas, pausar
           if (result.multiSheet) {
             multiSheetPending.push({
               name: result.name,
@@ -1588,8 +2036,6 @@ window.NexusActiveModule = ({
             });
             continue;
           }
-
-          // Si hubo error (probablemente protegido)
           if (result.error) {
             blocked.push({
               name: result.name,
@@ -1603,10 +2049,8 @@ window.NexusActiveModule = ({
             file: result.file,
             name: result.name,
             columns: fileColumns,
-            data: [] // Se llenará abajo
+            data: []
           };
-
-          // Transformamos las llaves a mayúsculas para estandarizar
           const upperData = result.data.map(row => {
             const newRow = {};
             result.columns.forEach(origCol => {
@@ -1616,17 +2060,6 @@ window.NexusActiveModule = ({
           });
           fileDataObj.data = upperData;
           parsedFiles.push(fileDataObj);
-          if (!templateColumns) {
-            templateColumns = fileColumns;
-            matchedFiles.push(fileDataObj);
-          } else {
-            const isStructureValid = fileColumns.length === templateColumns.length && fileColumns.every(c => templateColumns.includes(c));
-            if (isStructureValid) {
-              matchedFiles.push(fileDataObj);
-            } else {
-              mismatchedFiles.push(fileDataObj);
-            }
-          }
         }
 
         // --- SI HAY ARCHIVOS CON MÚLTIPLES HOJAS, PAUSAR ---
@@ -1648,20 +2081,24 @@ window.NexusActiveModule = ({
         if (parsedFiles.length === 0) throw new Error('Archivos vacíos o sin datos legibles.');
         setRawFiles(parsedFiles);
         setFiles(fileList);
+
+        // Determinar estructura guía (mayoría o archivo manual si ya fue elegido)
+        const {
+          guideColumns,
+          matchedFiles,
+          mismatchedFiles
+        } = calcularEstructuraGuia(parsedFiles, guideFileName);
         if (mismatchedFiles.length > 0) {
-          // DETENEMOS EL FLUJO: Hay un conflicto de estructura
           setConflictState({
             hasConflict: true,
-            baseColumns: templateColumns,
+            baseColumns: guideColumns,
             matchedFiles,
             mismatchedFiles
           });
           setLoading(false);
-          return; // Salimos y esperamos decisión del usuario
+          return;
         }
-
-        // Si no hay conflictos, procesamos y unimos directamente
-        processAndMergeFiles(parsedFiles, templateColumns, fileList);
+        processAndMergeFiles(parsedFiles, guideColumns, fileList);
       } catch (err) {
         setError(err.message);
         setLoading(false);
@@ -1690,18 +2127,16 @@ window.NexusActiveModule = ({
         return;
       }
 
-      // Re-evaluar conflictos con los archivos restantes
-      const templateCols = newRawFiles[0].columns;
-      let matched = [];
-      let mismatched = [];
-      newRawFiles.forEach(f => {
-        const isMatch = f.columns.length === templateCols.length && f.columns.every(c => templateCols.includes(c));
-        if (isMatch) matched.push(f);else mismatched.push(f);
-      });
+      // Re-evaluar conflictos con los archivos restantes usando mayoría
+      const {
+        guideColumns,
+        matchedFiles: matched,
+        mismatchedFiles: mismatched
+      } = calcularEstructuraGuia(newRawFiles, guideFileName);
       if (mismatched.length > 0) {
         setConflictState({
           hasConflict: true,
-          baseColumns: templateCols,
+          baseColumns: guideColumns,
           matchedFiles: matched,
           mismatchedFiles: mismatched
         });
@@ -1712,8 +2147,7 @@ window.NexusActiveModule = ({
           mismatchedFiles: [],
           matchedFiles: []
         });
-        // Si al borrar el archivo ya no hay conflictos, unimos lo que queda
-        processAndMergeFiles(newRawFiles, templateCols, newFiles);
+        processAndMergeFiles(newRawFiles, guideColumns, newFiles);
       }
     };
     const handleDrop = e => {
@@ -1900,39 +2334,37 @@ window.NexusActiveModule = ({
         display: 'none'
       },
       onChange: e => handleFileSelect(e.target.files)
-    })) : /*#__PURE__*/React.createElement(React.Fragment, null, conflictState.hasConflict ? /*#__PURE__*/React.createElement("div", {
-      className: "alert alert-warning",
-      style: {
-        flexDirection: 'column',
-        alignItems: 'flex-start',
-        background: '#fffbeb',
-        border: '1px solid #f59e0b'
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: '1.1rem',
-        fontWeight: 'bold',
-        color: '#b45309',
-        marginBottom: '0.5rem'
-      }
-    }, "\u26A0\uFE0F Estructuras Diferentes Detectadas"), /*#__PURE__*/React.createElement("p", {
-      style: {
-        color: '#92400e',
-        margin: 0
-      }
-    }, "Revisa la lista de archivos abajo. Puedes eliminar individualmente los que no correspondan (basurero rojo) o usar el \xE1rea de Staging para homologarlos."), /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: 'flex',
-        gap: '0.5rem',
-        marginTop: '1rem',
-        flexWrap: 'wrap'
-      }
-    }, /*#__PURE__*/React.createElement("button", {
-      className: "btn btn-primary",
-      onClick: () => setShowMappingModal(true)
-    }, "\uD83D\uDEE0\uFE0F Mapear y Homologar"), /*#__PURE__*/React.createElement("button", {
-      className: "btn btn-error",
-      onClick: () => {
+    })) : /*#__PURE__*/React.createElement(React.Fragment, null, conflictState.hasConflict ? /*#__PURE__*/React.createElement(PanelDiagnosticoConflicto, {
+      conflictState: conflictState,
+      rawFiles: rawFiles,
+      guideFileName: guideFileName,
+      onChangeGuide: newGuide => {
+        setGuideFileName(newGuide);
+        // Recalcular conflictos en caliente con la nueva guía
+        const {
+          guideColumns,
+          matchedFiles,
+          mismatchedFiles
+        } = calcularEstructuraGuia(rawFiles, newGuide);
+        if (mismatchedFiles.length > 0) {
+          setConflictState({
+            hasConflict: true,
+            baseColumns: guideColumns,
+            matchedFiles,
+            mismatchedFiles
+          });
+        } else {
+          setConflictState({
+            hasConflict: false,
+            baseColumns: [],
+            mismatchedFiles: [],
+            matchedFiles: []
+          });
+          processAndMergeFiles(rawFiles, guideColumns, files);
+        }
+      },
+      onMapear: () => setShowMappingModal(true),
+      onCancelar: () => {
         setConflictState({
           hasConflict: false,
           baseColumns: [],
@@ -1943,7 +2375,7 @@ window.NexusActiveModule = ({
         setRawFiles([]);
         setLoading(false);
       }
-    }, "\u274C Cancelar Toda la Carga"))) : /*#__PURE__*/React.createElement("div", {
+    }) : /*#__PURE__*/React.createElement("div", {
       className: "alert alert-success",
       style: {
         display: 'flex',
@@ -2082,7 +2514,157 @@ window.NexusActiveModule = ({
       onClick: () => setShowMappingModal(false)
     }, "\u2715")), /*#__PURE__*/React.createElement("p", {
       className: "card-subtitle"
-    }, "Aplica reglas a los datos crudos antes de unirlos. Especialmente \xFAtil para homologar columnas de archivos distintos o inyectar reglas de negocio tempranas."), /*#__PURE__*/React.createElement("div", {
+    }, "Aplica reglas a los datos crudos antes de unirlos. Especialmente \xFAtil para homologar columnas de archivos distintos o inyectar reglas de negocio tempranas."), (() => {
+      // Algoritmo de similitud de strings (Levenshtein simplificado)
+      const similaridad = (a, b) => {
+        a = a.toUpperCase();
+        b = b.toUpperCase();
+        if (a === b) return 1;
+        if (a.includes(b) || b.includes(a)) return 0.85;
+        // Bigramas compartidos
+        const bigramas = s => {
+          const bg = new Set();
+          for (let i = 0; i < s.length - 1; i++) bg.add(s.slice(i, i + 2));
+          return bg;
+        };
+        const bgA = bigramas(a),
+          bgB = bigramas(b);
+        let shared = 0;
+        bgA.forEach(bg => {
+          if (bgB.has(bg)) shared++;
+        });
+        return 2 * shared / (bgA.size + bgB.size + 0.001);
+      };
+
+      // Columnas del template (guía)
+      const templateCols = conflictState.baseColumns || [];
+      // Todas las columnas de archivos conflictivos que NO están en el template
+      const extraCols = new Set();
+      (conflictState.mismatchedFiles || []).forEach(f => {
+        f.columns.forEach(c => {
+          if (!templateCols.includes(c)) extraCols.add(c);
+        });
+      });
+
+      // Generar sugerencias: para cada columna extra, buscar la más parecida en el template
+      const sugerencias = [];
+      extraCols.forEach(extraCol => {
+        let mejor = null,
+          mejorScore = 0;
+        templateCols.forEach(tc => {
+          const score = similaridad(extraCol, tc);
+          if (score > mejorScore) {
+            mejorScore = score;
+            mejor = tc;
+          }
+        });
+        // Solo sugerir si hay similitud razonable (> 0.4) y la sugerencia no ya fue usada
+        if (mejor && mejorScore > 0.4) {
+          sugerencias.push({
+            desde: extraCol,
+            hacia: mejor,
+            score: mejorScore
+          });
+        }
+      });
+      if (sugerencias.length === 0) return null;
+      return /*#__PURE__*/React.createElement("div", {
+        style: {
+          background: '#f0fdf4',
+          border: '1px solid #86efac',
+          borderRadius: 8,
+          padding: '1rem',
+          marginBottom: '1.25rem'
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontWeight: 700,
+          fontSize: '0.82rem',
+          color: '#166534',
+          marginBottom: 8
+        }
+      }, "\uD83D\uDCA1 Sugerencias autom\xE1ticas de homologaci\xF3n (columnas con nombres similares detectadas)"), /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 6
+        }
+      }, sugerencias.map((s, idx) => {
+        // Verificar si ya existe una regla para este par
+        const yaAplicada = mappingRules.some(r => r.type === 'rename' && r.sourceColumn === s.desde && r.targetColumn === s.hacia);
+        return /*#__PURE__*/React.createElement("div", {
+          key: idx,
+          style: {
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            flexWrap: 'wrap'
+          }
+        }, /*#__PURE__*/React.createElement("span", {
+          style: {
+            background: '#fecaca',
+            color: '#991b1b',
+            fontSize: '0.75rem',
+            fontFamily: 'monospace',
+            padding: '2px 8px',
+            borderRadius: 4
+          }
+        }, s.desde), /*#__PURE__*/React.createElement("span", {
+          style: {
+            color: '#6b7280',
+            fontSize: '0.8rem'
+          }
+        }, "\u2192"), /*#__PURE__*/React.createElement("span", {
+          style: {
+            background: '#bbf7d0',
+            color: '#166534',
+            fontSize: '0.75rem',
+            fontFamily: 'monospace',
+            padding: '2px 8px',
+            borderRadius: 4
+          }
+        }, s.hacia), /*#__PURE__*/React.createElement("span", {
+          style: {
+            color: '#9ca3af',
+            fontSize: '0.7rem'
+          }
+        }, "(", Math.round(s.score * 100), "% similar)"), yaAplicada ? /*#__PURE__*/React.createElement("span", {
+          style: {
+            fontSize: '0.7rem',
+            color: '#059669',
+            fontWeight: 700
+          }
+        }, "\u2713 Ya aplicada") : /*#__PURE__*/React.createElement("button", {
+          onClick: () => {
+            setMappingRules(prev => [...prev, {
+              id: Date.now() + Math.random(),
+              type: 'rename',
+              targetColumn: s.hacia,
+              sourceColumn: s.desde,
+              sourceColumns: [],
+              separator: ' ',
+              staticValue: '',
+              keepOriginals: false,
+              valueMap: {},
+              falseValue: '',
+              condOperator: '==',
+              condValue: '',
+              trueValue: ''
+            }]);
+          },
+          style: {
+            background: 'var(--primary)',
+            color: 'white',
+            border: 'none',
+            borderRadius: 4,
+            padding: '2px 10px',
+            fontSize: '0.72rem',
+            fontWeight: 700,
+            cursor: 'pointer'
+          }
+        }, "+ Aplicar"));
+      })));
+    })(), /*#__PURE__*/React.createElement("div", {
       style: {
         display: 'flex',
         gap: '0.5rem',
@@ -2285,50 +2867,113 @@ window.NexusActiveModule = ({
         cursor: 'pointer',
         margin: 0
       }
-    }, "Conservar columnas originales (no eliminarlas)")))), rule.type === 'rename' && /*#__PURE__*/React.createElement("div", {
-      className: "grid grid-2",
-      style: {
-        gap: '1rem',
-        alignItems: 'end'
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "form-group",
-      style: {
-        marginBottom: 0
-      }
-    }, /*#__PURE__*/React.createElement("label", {
-      className: "form-label",
-      style: {
-        fontSize: '0.8rem',
-        color: 'var(--primary)'
-      }
-    }, "1. Buscar esta columna:"), /*#__PURE__*/React.createElement("select", {
-      className: "form-select",
-      value: rule.sourceColumn,
-      onChange: e => updateMappingRule(rule.id, 'sourceColumn', e.target.value)
-    }, /*#__PURE__*/React.createElement("option", {
-      value: ""
-    }, "-- Seleccionar Columna --"), getAvailableColumns().map(c => /*#__PURE__*/React.createElement("option", {
-      key: c,
-      value: c
-    }, c)))), /*#__PURE__*/React.createElement("div", {
-      className: "form-group",
-      style: {
-        marginBottom: 0
-      }
-    }, /*#__PURE__*/React.createElement("label", {
-      className: "form-label",
-      style: {
-        fontSize: '0.8rem',
-        color: 'var(--primary)'
-      }
-    }, "2. Renombrarla / Unificarla como:"), /*#__PURE__*/React.createElement("input", {
-      type: "text",
-      className: "form-input",
-      placeholder: "Ej: RUT_CLIENTE",
-      value: rule.targetColumn,
-      onChange: e => updateMappingRule(rule.id, 'targetColumn', e.target.value.toUpperCase())
-    }))), rule.type === 'static' && /*#__PURE__*/React.createElement("div", {
+    }, "Conservar columnas originales (no eliminarlas)")))), rule.type === 'rename' && (() => {
+      // Archivo que contiene la columna origen (para contextualizar)
+      const archivosConOrigen = rule.sourceColumn ? (conflictState.mismatchedFiles || []).filter(f => f.columns.includes(rule.sourceColumn)).map(f => f.name.replace(/\.[^.]+$/, '')) : [];
+      return /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '0.75rem'
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "grid grid-2",
+        style: {
+          gap: '1rem',
+          alignItems: 'start'
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "form-group",
+        style: {
+          marginBottom: 0
+        }
+      }, /*#__PURE__*/React.createElement("label", {
+        className: "form-label",
+        style: {
+          fontSize: '0.8rem',
+          color: 'var(--primary)'
+        }
+      }, "1. Columna a homologar (origen):"), /*#__PURE__*/React.createElement("select", {
+        className: "form-select",
+        value: rule.sourceColumn,
+        onChange: e => updateMappingRule(rule.id, 'sourceColumn', e.target.value)
+      }, /*#__PURE__*/React.createElement("option", {
+        value: ""
+      }, "-- Seleccionar Columna --"), conflictState.hasConflict && (() => {
+        const templateCols = conflictState.baseColumns || [];
+        const extraCols = new Set();
+        (conflictState.mismatchedFiles || []).forEach(f => f.columns.forEach(c => {
+          if (!templateCols.includes(c)) extraCols.add(c);
+        }));
+        const extras = Array.from(extraCols).sort();
+        const resto = getAvailableColumns().filter(c => !extraCols.has(c));
+        return /*#__PURE__*/React.createElement(React.Fragment, null, extras.length > 0 && /*#__PURE__*/React.createElement("optgroup", {
+          label: "\u26A0\uFE0F Columnas en conflicto (extras)"
+        }, extras.map(c => /*#__PURE__*/React.createElement("option", {
+          key: c,
+          value: c
+        }, c))), resto.length > 0 && /*#__PURE__*/React.createElement("optgroup", {
+          label: "Otras columnas"
+        }, resto.map(c => /*#__PURE__*/React.createElement("option", {
+          key: c,
+          value: c
+        }, c))));
+      })(), !conflictState.hasConflict && getAvailableColumns().map(c => /*#__PURE__*/React.createElement("option", {
+        key: c,
+        value: c
+      }, c))), archivosConOrigen.length > 0 && /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: '0.7rem',
+          color: '#6b7280',
+          marginTop: 3
+        }
+      }, "\uD83D\uDCC2 Presente en: ", archivosConOrigen.join(', '))), /*#__PURE__*/React.createElement("div", {
+        className: "form-group",
+        style: {
+          marginBottom: 0
+        }
+      }, /*#__PURE__*/React.createElement("label", {
+        className: "form-label",
+        style: {
+          fontSize: '0.8rem',
+          color: 'var(--primary)'
+        }
+      }, "2. Renombrar como (destino):"), /*#__PURE__*/React.createElement("select", {
+        className: "form-select",
+        style: {
+          marginBottom: '0.4rem'
+        },
+        value: conflictState.baseColumns?.includes(rule.targetColumn) ? rule.targetColumn : '__custom__',
+        onChange: e => {
+          if (e.target.value !== '__custom__') {
+            updateMappingRule(rule.id, 'targetColumn', e.target.value);
+          }
+        }
+      }, /*#__PURE__*/React.createElement("option", {
+        value: "__custom__"
+      }, "\u270F\uFE0F Escribir nombre personalizado..."), (conflictState.baseColumns || []).map(c => /*#__PURE__*/React.createElement("option", {
+        key: c,
+        value: c
+      }, c))), /*#__PURE__*/React.createElement("input", {
+        type: "text",
+        className: "form-input",
+        placeholder: "O escribe aqu\xED el nombre final",
+        value: rule.targetColumn,
+        onChange: e => updateMappingRule(rule.id, 'targetColumn', e.target.value.toUpperCase())
+      }), rule.targetColumn && !(conflictState.baseColumns || []).includes(rule.targetColumn) && /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: '0.7rem',
+          color: '#d97706',
+          marginTop: 3
+        }
+      }, "\u26A0\uFE0F Nombre personalizado (no est\xE1 en el template actual)"), rule.targetColumn && (conflictState.baseColumns || []).includes(rule.targetColumn) && /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: '0.7rem',
+          color: '#059669',
+          marginTop: 3
+        }
+      }, "\u2713 Coincide con columna del template"))));
+    })(), rule.type === 'static' && /*#__PURE__*/React.createElement("div", {
       className: "grid grid-2",
       style: {
         gap: '1rem',
@@ -2529,28 +3174,86 @@ window.NexusActiveModule = ({
       },
       value: rule.falseValue || '',
       onChange: e => updateMappingRule(rule.id, 'falseValue', e.target.value.toUpperCase())
-    })))))), rule.type === 'drop' && /*#__PURE__*/React.createElement("div", {
-      className: "form-group",
-      style: {
-        marginBottom: 0,
-        width: '50%'
-      }
-    }, /*#__PURE__*/React.createElement("label", {
-      className: "form-label",
-      style: {
-        fontSize: '0.8rem',
-        color: 'var(--error)'
-      }
-    }, "Selecciona la columna a eliminar:"), /*#__PURE__*/React.createElement("select", {
-      className: "form-select",
-      value: rule.sourceColumn,
-      onChange: e => updateMappingRule(rule.id, 'sourceColumn', e.target.value)
-    }, /*#__PURE__*/React.createElement("option", {
-      value: ""
-    }, "-- Seleccionar --"), getAvailableColumns().map(c => /*#__PURE__*/React.createElement("option", {
-      key: c,
-      value: c
-    }, c))))))), /*#__PURE__*/React.createElement("div", {
+    })))))), rule.type === 'drop' && (() => {
+      const templateCols = conflictState.baseColumns || [];
+      const extraCols = new Set();
+      (conflictState.mismatchedFiles || []).forEach(f => f.columns.forEach(c => {
+        if (!templateCols.includes(c)) extraCols.add(c);
+      }));
+      const extras = Array.from(extraCols).sort();
+      const resto = getAvailableColumns().filter(c => !extraCols.has(c));
+
+      // Info de presencia de la columna seleccionada
+      const allFiles = [...(conflictState.matchedFiles || []), ...(conflictState.mismatchedFiles || [])];
+      const presenciaInfo = rule.sourceColumn && allFiles.length > 0 ? allFiles.filter(f => f.columns.includes(rule.sourceColumn)).map(f => f.name.replace(/\.[^.]+$/, '')) : [];
+      const ausenciaInfo = rule.sourceColumn && allFiles.length > 0 ? allFiles.filter(f => !f.columns.includes(rule.sourceColumn)).map(f => f.name.replace(/\.[^.]+$/, '')) : [];
+      return /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '0.5rem',
+          width: '55%',
+          minWidth: 240
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "form-group",
+        style: {
+          marginBottom: 0
+        }
+      }, /*#__PURE__*/React.createElement("label", {
+        className: "form-label",
+        style: {
+          fontSize: '0.8rem',
+          color: 'var(--error)'
+        }
+      }, "Selecciona la columna a eliminar:"), /*#__PURE__*/React.createElement("select", {
+        className: "form-select",
+        value: rule.sourceColumn,
+        onChange: e => updateMappingRule(rule.id, 'sourceColumn', e.target.value)
+      }, /*#__PURE__*/React.createElement("option", {
+        value: ""
+      }, "-- Seleccionar --"), conflictState.hasConflict ? /*#__PURE__*/React.createElement(React.Fragment, null, extras.length > 0 && /*#__PURE__*/React.createElement("optgroup", {
+        label: "\u26A0\uFE0F Columnas en conflicto (extras)"
+      }, extras.map(c => /*#__PURE__*/React.createElement("option", {
+        key: c,
+        value: c
+      }, c))), resto.length > 0 && /*#__PURE__*/React.createElement("optgroup", {
+        label: "Columnas del template"
+      }, resto.map(c => /*#__PURE__*/React.createElement("option", {
+        key: c,
+        value: c
+      }, c)))) : getAvailableColumns().map(c => /*#__PURE__*/React.createElement("option", {
+        key: c,
+        value: c
+      }, c)))), rule.sourceColumn && allFiles.length > 0 && /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: '0.71rem',
+          background: '#fef2f2',
+          border: '1px solid #fecaca',
+          borderRadius: 6,
+          padding: '0.4rem 0.6rem',
+          lineHeight: 1.6
+        }
+      }, presenciaInfo.length > 0 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+        style: {
+          color: '#991b1b',
+          fontWeight: 700
+        }
+      }, "Presente en (", presenciaInfo.length, "):"), " ", /*#__PURE__*/React.createElement("span", {
+        style: {
+          color: '#6b7280'
+        }
+      }, presenciaInfo.join(', '))), ausenciaInfo.length > 0 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+        style: {
+          color: '#6b7280',
+          fontWeight: 700
+        }
+      }, "Ausente en (", ausenciaInfo.length, "):"), " ", /*#__PURE__*/React.createElement("span", {
+        style: {
+          color: '#9ca3af'
+        }
+      }, ausenciaInfo.join(', ')))));
+    })()))), /*#__PURE__*/React.createElement("div", {
       className: "nav-buttons",
       style: {
         marginTop: '1rem',
@@ -5610,6 +6313,9 @@ window.NexusActiveModule = ({
       onClick: nextStep
     }, "Continuar a Exportaci\xF3n \u2192")));
   }
+
+  // Regex para detectar columnas de teléfono TEL_1, TEL_2 ... TEL_n
+  const TEL_COL_REGEX = /^TEL_\d+$/i;
   const crearSheetLimpio = (dataArray, headersOverride) => {
     if (!dataArray || dataArray.length === 0) return {
       ws: null,
@@ -5617,6 +6323,8 @@ window.NexusActiveModule = ({
       cleanData: []
     };
     const allCols = headersOverride || Object.keys(dataArray[0]).filter(k => !k.startsWith('__EMPTY'));
+
+    // Detectar última fila con algún valor real
     let lastRow = -1;
     for (let i = dataArray.length - 1; i >= 0; i--) {
       if (Object.values(dataArray[i]).some(v => v !== "" && v !== null && v !== undefined)) {
@@ -5630,17 +6338,49 @@ window.NexusActiveModule = ({
       cleanData: []
     };
     const trimmedRows = dataArray.slice(0, lastRow + 1);
+
+    // Eliminar columnas completamente vacías en todo el dataset
     const headers = allCols.filter(col => trimmedRows.some(r => r[col] !== "" && r[col] !== null && r[col] !== undefined));
+
+    // Construir filas sin propiedades vacías (celda inexistente = cero bytes en XML)
+    // Excepción: columnas TEL_n SIEMPRE se fuerzan a número para garantizar tipo numérico en Excel
     const cleanData = trimmedRows.map(r => {
       const n = {};
       headers.forEach(h => {
-        if (r[h] !== "" && r[h] !== null && r[h] !== undefined) n[h] = r[h];
+        const val = r[h];
+        if (val !== "" && val !== null && val !== undefined) {
+          // Forzar numérico en columnas TEL_1..TEL_n
+          if (TEL_COL_REGEX.test(h)) {
+            const num = Number(String(val).replace(/\D/g, ''));
+            n[h] = isNaN(num) ? val : num;
+          } else {
+            n[h] = val;
+          }
+        } else if (TEL_COL_REGEX.test(h)) {
+          // Para TEL vacío: omitir la celda igual que los demás (no poner 0 ni string)
+          // SheetJS lo dejará como celda vacía, Excel lo leerá como vacío numérico
+        }
       });
       return n;
     });
     const ws = XLSX.utils.json_to_sheet(cleanData, {
       header: headers
     });
+
+    // Anotar formato numérico explícito en todas las celdas de columnas TEL_n
+    // para que Excel no interprete los números largos como texto al abrir
+    headers.forEach((h, colIdx) => {
+      if (!TEL_COL_REGEX.test(h)) return;
+      const colLetter = XLSX.utils.encode_col(colIdx);
+      for (let rowIdx = 1; rowIdx <= cleanData.length; rowIdx++) {
+        const cellAddr = `${colLetter}${rowIdx + 1}`;
+        if (ws[cellAddr] && ws[cellAddr].t === 'n') {
+          ws[cellAddr].z = '0'; // Formato numérico sin decimales
+        }
+      }
+    });
+
+    // Fijar rango explícito para que Excel no lea más allá de los datos
     if (cleanData.length > 0) {
       const endCol = XLSX.utils.encode_col(headers.length - 1);
       ws['!ref'] = `A1:${endCol}${cleanData.length + 1}`;

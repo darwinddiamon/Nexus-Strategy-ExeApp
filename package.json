@@ -2,12 +2,12 @@
     "name": "nexus-strategy-cc",
     "version": "1.0.0",
     "description": "Gestor integral de datos Call Center - Portable",
-    "main": "src/main.js",
+    "main": "obf-src/main.js",
     "author": "Darwin Diamon",
     "scripts": {
         "start": "electron .",
         "obfuscate": "javascript-obfuscator src --output obf-src",
-        "protect:modules": "babel src-modules --out-dir src-modules-built --plugins @babel/plugin-transform-react-jsx && javascript-obfuscator src-modules-built --output modules --string-array-encoding base64 --compact true --simplify true",
+        "protect:modules": "babel src-modules --out-dir src-modules-built --plugins @babel/plugin-transform-react-jsx \u0026\u0026 javascript-obfuscator src-modules-built --output modules --string-array-encoding base64 --compact true --simplify true",
         "build:portable": "electron-builder --win portable"
     },
     "build": {
@@ -17,11 +17,21 @@
             "output": "dist"
         },
         "win": {
-            "target": "portable"
+            "target": "portable",
+            "icon": "icon/NexusIcon.ico"
         },
         "portable": {
             "artifactName": "Nexus.exe"
-        }
+        },
+        "files": [
+            "obf-src/**/*",
+            "modules/**/*",
+            "!src-modules/**",
+            "!src-modules-built/**",
+            "!Nexus_App_Html/**",
+            "!data/**",
+            "!babel.config.json"
+        ]
     },
     "dependencies": {
         "mssql": "^10.0.4",
