@@ -176,6 +176,38 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
         );
     };
 
+
+    // ========================================================================
+    // COMPONENTE: SqlButton - Botón SQL con feedback visual de ejecución
+    // Evita doble click. Uso: <SqlButton onClick={async () => {...}} />
+    // ========================================================================
+    const SqlButton = ({ onClick, label = 'Ejecutar', disabled = false, style: extraStyle = {} }) => {
+        const [running, setRunning] = useState(false);
+        const handleClick = async () => {
+            if (running || disabled) return;
+            setRunning(true);
+            try { await onClick(); } catch (e) { /* el caller maneja errores */ }
+            setRunning(false);
+        };
+        const base = {
+            padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold',
+            fontSize: '0.8rem', border: 'none', alignSelf: 'flex-start',
+            display: 'flex', alignItems: 'center', gap: '6px',
+            transition: 'opacity 0.2s',
+            cursor: running || disabled ? 'not-allowed' : 'pointer',
+            opacity: running || disabled ? 0.7 : 1,
+            background: '#3b82f6', color: 'white',
+            ...extraStyle
+        };
+        return (
+            <button type="button" style={base} onClick={handleClick} disabled={running || disabled}>
+                {running
+                    ? <><span style={{ display: 'inline-block', width: 12, height: 12, border: '2px solid white', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} /> Ejecutando...</>
+                    : <> {label}</>}
+            </button>
+        );
+    };
+
     // Componente: Selector de hojas para archivos con múltiples hojas
     const SelectorHojas = ({ pendientes, onConfirm, onCancel, Icon }) => {
         const [selecciones, setSelecciones] = useState(() => {
@@ -635,13 +667,13 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                                 ) : (
                                     <div className="flex flex-col gap-2">
                                         <textarea style={{ width: '100%', minHeight: '80px', padding: '0.5rem', border: '2px solid #3b82f6', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.8rem', resize: 'vertical', boxSizing: 'border-box' }} value={refSqlQuery} onChange={e => setRefSqlQuery(e.target.value)} placeholder="SELECT RUT, NOMBRES... FROM tabla WHERE..." />
-                                        <button type="button" style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.8rem', background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', alignSelf: 'flex-start' }} onClick={async () => {
+                                        <SqlButton onClick={async () => {
                                             if (!refSqlQuery.trim()) return;
                                             const r = await window.nexusAPI.executeSQL(refSqlQuery);
                                             if (!r.success) { addToast('Error SQL: ' + r.error, 'error'); return; }
                                             setRefSqlData(r.data);
                                             addToast(`${r.data.length} registros cargados desde SQL.`, 'success');
-                                        }}>⚡ Ejecutar</button>
+                                        }} />
                                         {refSqlData && <p className="text-xs text-emerald-600 font-bold">✓ {refSqlData.length} registros listos para cruce</p>}
                                     </div>
                                 )}
@@ -763,7 +795,7 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                                     </div>
                                     <div className="bg-amber-50 border border-amber-200 rounded p-2 text-[10px] text-amber-800 font-bold">⚠️ Fecha calculada automáticamente al primer día del mes. Puedes editar la query si necesitas otra fecha.</div>
                                     <textarea style={{ width: '100%', minHeight: '80px', padding: '0.5rem', border: '2px solid #3b82f6', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.75rem', resize: 'vertical', boxSizing: 'border-box' }} value={exclusionSqlQuery} onChange={e => setExclusionSqlQuery(e.target.value)} />
-                                    <button type="button" style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.8rem', background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', alignSelf: 'flex-start' }} onClick={async () => {
+                                    <SqlButton onClick={async () => {
                                         if (!exclusionListasRdr.trim()) { addToast('⚠️ Ingresa al menos una lista vigente RDR antes de ejecutar.', 'error'); return; }
                                         const qFinalRdr = buildUnionAllQuery(exclusionListasRdr, '*', getPrimerDiaMesGlobal(), 'RDR');
                                         if (!qFinalRdr) return;
@@ -772,7 +804,7 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                                         if (!r.success) { addToast('Error SQL: ' + r.error, 'error'); return; }
                                         setExclusionSqlData(r.data);
                                         addToast(`${r.data.length} registros cargados desde SQL.`, 'success');
-                                    }}>⚡ Ejecutar</button>
+                                    }} />
                                     {exclusionSqlData && <p className="text-xs text-emerald-600 font-bold">✓ {exclusionSqlData.length} registros cargados desde SQL</p>}
                                 </div>
                             )}
@@ -1383,13 +1415,13 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                                 ) : (
                                     <div className="flex flex-col gap-2">
                                         <textarea style={{ width: '100%', minHeight: '80px', padding: '0.5rem', border: '2px solid #3b82f6', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.8rem', resize: 'vertical', boxSizing: 'border-box' }} value={refSqlQuery} onChange={e => setRefSqlQuery(e.target.value)} placeholder="SELECT RUT, NOMBRES... FROM tabla WHERE..." />
-                                        <button type="button" style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.8rem', background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', alignSelf: 'flex-start' }} onClick={async () => {
+                                        <SqlButton onClick={async () => {
                                             if (!refSqlQuery.trim()) return;
                                             const r = await window.nexusAPI.executeSQL(refSqlQuery);
                                             if (!r.success) { addToast('Error SQL: ' + r.error, 'error'); return; }
                                             setRefSqlData(r.data);
                                             addToast(`${r.data.length} registros cargados desde SQL.`, 'success');
-                                        }}>⚡ Ejecutar</button>
+                                        }} />
                                         {refSqlData && <p className="text-xs text-emerald-600 font-bold">✓ {refSqlData.length} registros listos para cruce</p>}
                                     </div>
                                 )}
@@ -1523,7 +1555,7 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                                     </div>
                                     <div className="bg-amber-50 border border-amber-200 rounded p-2 text-[10px] text-amber-800 font-bold">⚠️ Fecha calculada automáticamente al primer día del mes. Puedes editar la query si necesitas otra fecha.</div>
                                     <textarea style={{ width: '100%', minHeight: '80px', padding: '0.5rem', border: '2px solid #3b82f6', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.75rem', resize: 'vertical', boxSizing: 'border-box' }} value={exclusionSqlQuery} onChange={e => setExclusionSqlQuery(e.target.value)} />
-                                    <button type="button" style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.8rem', background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', alignSelf: 'flex-start' }} onClick={async () => {
+                                    <SqlButton onClick={async () => {
                                         if (!exclusionListasSaeWeb.trim()) { addToast('⚠️ Ingresa al menos una lista vigente SAE_WEB antes de ejecutar.', 'error'); return; }
                                         const qFinalSaeWeb = buildUnionAllQuery(exclusionListasSaeWeb, '*', getPrimerDiaMesGlobal(), 'SAE_WEB');
                                         if (!qFinalSaeWeb) return;
@@ -1532,7 +1564,7 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                                         if (!r.success) { addToast('Error SQL: ' + r.error, 'error'); return; }
                                         setExclusionSqlData(r.data);
                                         addToast(`${r.data.length} registros cargados desde SQL.`, 'success');
-                                    }}>⚡ Ejecutar</button>
+                                    }} />
                                     {exclusionSqlData && <p className="text-xs text-emerald-600 font-bold">✓ {exclusionSqlData.length} registros cargados desde SQL</p>}
                                 </div>
                             )}
@@ -1920,7 +1952,7 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                                     </div>
                                     <div className="bg-amber-50 border border-amber-200 rounded p-2 text-[10px] text-amber-800 font-bold">⚠️ La fecha se ajusta automáticamente al primer día del mes en curso. Puedes editar la query si necesitas otra fecha.</div>
                                     <textarea style={{ width: '100%', minHeight: '120px', padding: '0.5rem', border: '2px solid #3b82f6', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.72rem', resize: 'vertical', boxSizing: 'border-box' }} value={(() => { const f = getPrimerDiaMesGlobal(); const parts = []; const qW = buildUnionAllQuery(cruceSqlListasSaeWeb, '*', f, 'SAE_WEB'); const qS = buildUnionAllQuery(cruceSqlListasSae, '*', f, 'SAE'); if (qW) parts.push(qW); if (qS) parts.push(qS); return parts.length > 0 ? parts.join('\n\nunion all\n\n') + ';' : cruceSqlQuery; })()} onChange={e => setCruceSqlQuery(e.target.value)} />
-                                    <button type="button" style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.8rem', background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', alignSelf: 'flex-start' }} onClick={async () => {
+                                    <SqlButton onClick={async () => {
                                         if (!cruceSqlListasSaeWeb.trim() && !cruceSqlListasSae.trim()) { addToast('⚠️ Ingresa al menos una lista vigente (SAE_WEB o SAE) antes de ejecutar.', 'error'); return; }
                                         const f3 = getPrimerDiaMesGlobal();
                                         const parts3 = [];
@@ -1932,7 +1964,7 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                                         if (!r.success) { addToast('Error SQL: ' + r.error, 'error'); return; }
                                         setCruceSqlData(r.data);
                                         addToast(`${r.data.length} registros cargados desde SQL.`, 'success');
-                                    }}>⚡ Ejecutar</button>
+                                    }} />
                                     {cruceSqlData && <p className="text-xs text-emerald-600 font-bold">✓ {cruceSqlData.length} registros cargados desde SQL</p>}
                                 </div>
                             )}
@@ -2451,13 +2483,13 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                                 ) : (
                                     <div className="flex flex-col gap-2">
                                         <textarea style={{ width: '100%', minHeight: '80px', padding: '0.5rem', border: '2px solid #3b82f6', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.8rem', resize: 'vertical', boxSizing: 'border-box' }} value={refSqlQuery} onChange={e => setRefSqlQuery(e.target.value)} placeholder="SELECT RUT, NOMBRES... FROM tabla WHERE..." />
-                                        <button type="button" style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.8rem', background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', alignSelf: 'flex-start' }} onClick={async () => {
+                                        <SqlButton onClick={async () => {
                                             if (!refSqlQuery.trim()) return;
                                             const r = await window.nexusAPI.executeSQL(refSqlQuery);
                                             if (!r.success) { addToast('Error SQL: ' + r.error, 'error'); return; }
                                             setRefSqlData(r.data);
                                             addToast(`${r.data.length} registros cargados desde SQL.`, 'success');
-                                        }}>⚡ Ejecutar</button>
+                                        }} />
                                         {refSqlData && <p className="text-xs text-emerald-600 font-bold">✓ {refSqlData.length} registros listos para cruce</p>}
                                     </div>
                                 )}
@@ -2558,7 +2590,7 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                                         </div>
                                         <div className="bg-amber-50 border border-amber-200 rounded p-2 text-[10px] text-amber-800 font-bold">⚠️ Fecha calculada automáticamente al primer día del mes. Puedes editar la query si necesitas otra fecha.</div>
                                         <textarea style={{ width: '100%', minHeight: '80px', padding: '0.5rem', border: '2px solid #3b82f6', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.75rem', resize: 'vertical', boxSizing: 'border-box' }} value={cruceSqlQuery} onChange={e => setCruceSqlQuery(e.target.value)} />
-                                        <button type="button" style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.8rem', background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', alignSelf: 'flex-start' }} onClick={async () => {
+                                        <SqlButton onClick={async () => {
                                             if (!cruceSqlListasCC.trim()) { addToast('⚠️ Ingresa al menos una lista vigente CC antes de ejecutar.', 'error'); return; }
                                             const qFinalCC = buildUnionAllQuery(cruceSqlListasCC, '*', getPrimerDiaMesGlobal(), 'CC');
                                             if (!qFinalCC) return;
@@ -2567,7 +2599,7 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                                             if (!r.success) { addToast('Error SQL: ' + r.error, 'error'); return; }
                                             setCruceSqlData(r.data);
                                             addToast(`${r.data.length} registros cargados desde SQL.`, 'success');
-                                        }}>⚡ Ejecutar</button>
+                                        }} />
                                         {cruceSqlData && <p className="text-xs text-emerald-600 font-bold">✓ {cruceSqlData.length} registros cargados desde SQL</p>}
                                     </div>
                                 )}
@@ -3287,8 +3319,7 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                                         ⚠️ La fecha de corte se calcula automáticamente al primer día del mes en curso. Puedes editar la query si necesitas otra fecha.
                                     </div>
                                     <textarea style={{ width: '100%', minHeight: '100px', padding: '0.5rem', border: '2px solid #8b5cf6', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.75rem', resize: 'vertical', boxSizing: 'border-box' }} value={(() => { const q = buildQueryConListas(); return q || crmSqlQuery; })()} onChange={e => setCrmSqlQuery(e.target.value)} onClick={e => e.stopPropagation()} />
-                                    <button type="button" style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.8rem', background: '#8b5cf6', color: 'white', border: 'none', cursor: 'pointer', alignSelf: 'flex-start' }} onClick={async (e) => {
-                                        e.stopPropagation();
+                                    <SqlButton style={{ background: '#8b5cf6' }} onClick={async () => {
                                         if (type === 'RDR' && !listasRDR.trim()) { setPanelMessage({ type: 'error', text: '⚠️ Debes ingresar al menos una lista vigente para RDR antes de ejecutar.' }); return; }
                                         if (type === 'SAE' && !listasSaeWeb.trim() && !listasSae.trim()) { setPanelMessage({ type: 'error', text: '⚠️ Debes ingresar al menos una lista vigente (SAE_WEB o SAE) antes de ejecutar.' }); return; }
                                         if (type === 'CC' && !listasCC.trim()) { setPanelMessage({ type: 'error', text: '⚠️ Debes ingresar al menos una lista vigente para CC antes de ejecutar.' }); return; }
@@ -3298,7 +3329,7 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                                         if (!r.success) { setPanelMessage({ type: 'error', text: 'Error SQL: ' + r.error }); return; }
                                         setCrmSqlData(r.data);
                                         setPanelMessage({ type: 'success', text: `${r.data.length} registros cargados desde SQL.` });
-                                    }}>⚡ Ejecutar</button>
+                                    }} />
                                     {crmSqlData && <p className="text-xs text-emerald-600 font-bold">✓ {crmSqlData.length} registros listos</p>}
                                 </div>
                             )}
@@ -3865,7 +3896,7 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                                             </div>
                                             <div className="bg-amber-50 border border-amber-200 rounded p-1.5 text-[10px] text-amber-800 font-bold">⚠️ Fecha al primer día del mes. Puedes editar la query si necesitas otra.</div>
                                             <textarea style={{ width: '100%', minHeight: '70px', padding: '0.5rem', border: '2px solid #3b82f6', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.72rem', resize: 'vertical', boxSizing: 'border-box' }} value={vigenteSqlQuery} onChange={e => setVigenteSqlQuery(e.target.value)} />
-                                            <button type="button" style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.75rem', background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer' }} onClick={async () => {
+                                            <SqlButton onClick={async () => {
                                                 if (!vigenteSqlListas.trim()) { setPanelMessage({ type: 'error', text: '⚠️ Ingresa al menos una lista vigente antes de ejecutar.' }); return; }
                                                 const qFinalSC = buildUnionAllQuery(vigenteSqlListas, 'vl.postal_code,vl.lead_id,status,list_id,user', getPrimerDiaMesGlobal(), 'Consumer');
                                                 if (!qFinalSC) return;
@@ -3874,7 +3905,7 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                                                 if (!r.success) { setPanelMessage({ type: 'error', text: 'Error SQL: ' + r.error }); return; }
                                                 setVigenteSqlData(r.data);
                                                 setPanelMessage({ type: 'success', text: `${r.data.length} registros cargados desde SQL.` });
-                                            }}>⚡ Ejecutar</button>
+                                            }} />
                                             {vigenteSqlData && <p className="text-xs text-emerald-600 font-bold">✓ {vigenteSqlData.length} registros</p>}
                                         </div>
                                     )}
@@ -4360,7 +4391,7 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                                     </div>
                                     <div className="bg-amber-50 border border-amber-200 rounded p-2 text-[10px] text-amber-800 font-bold">⚠️ Fecha calculada automáticamente al primer día del mes. Puedes editar la query si necesitas otra fecha.</div>
                                     <textarea style={{ width: '100%', minHeight: '120px', padding: '0.5rem', border: '2px solid #3b82f6', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.8rem', resize: 'vertical', boxSizing: 'border-box' }} value={cruceSqlQuery} onChange={e => setCruceSqlQuery(e.target.value)} />
-                                    <button type="button" style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.8rem', background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', alignSelf: 'flex-start' }} onClick={async () => {
+                                    <SqlButton onClick={async () => {
                                         if (!cruceSqlListasEst.trim()) { setPanelMessage({ type: 'error', text: '⚠️ Ingresa al menos una lista vigente antes de ejecutar.' }); return; }
                                         const qFinalEst = buildUnionAllQuery(cruceSqlListasEst, 'vl.lead_id, vl.vendor_lead_code, list_id, status, base, entry_date, user', getPrimerDiaMesGlobal(), 'Estrategia');
                                         if (!qFinalEst) return;
@@ -4373,7 +4404,7 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                                         if (faltantes.length > 0) { setPanelMessage({ type: 'error', text: `⚠️ Faltan columnas requeridas: ${faltantes.join(', ')}` }); return; }
                                         setCruceSqlData(r.data);
                                         setPanelMessage({ type: 'success', text: `${r.data.length} registros cargados desde SQL.` });
-                                    }}>⚡ Ejecutar</button>
+                                    }} />
                                     {cruceSqlData && <p className="text-xs text-emerald-600 font-bold">✓ {cruceSqlData.length} registros cargados desde SQL</p>}
                                 </div>
                             )}
@@ -4943,13 +4974,13 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                                             ) : (
                                                 <div className="flex flex-col gap-1">
                                                     <textarea style={{ width: '100%', minHeight: '70px', padding: '0.5rem', border: '2px solid #3b82f6', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.75rem', resize: 'vertical', boxSizing: 'border-box' }} value={cruceSqlQuery} onChange={e => setCruceSqlQuery(e.target.value)} placeholder="SELECT ID FROM tabla WHERE..." />
-                                                    <button type="button" style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.75rem', background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer' }} onClick={async () => {
+                                                    <SqlButton onClick={async () => {
                                                         if (!cruceSqlQuery.trim()) return;
                                                         const r = await window.nexusAPI.executeSQL(cruceSqlQuery);
                                                         if (!r.success) { addToast('Error SQL: ' + r.error, 'error'); return; }
                                                         setCruceSqlData(r.data);
                                                         addToast(`${r.data.length} registros cargados desde SQL.`, 'success');
-                                                    }}>⚡ Ejecutar</button>
+                                                    }} />
                                                     {cruceSqlData && <p className="text-xs text-emerald-600 font-bold">✓ {cruceSqlData.length} registros</p>}
                                                 </div>
                                             )}
@@ -5560,13 +5591,13 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                                 ) : (
                                     <div className="flex flex-col gap-1">
                                         <textarea style={{ width: '100%', minHeight: '70px', padding: '0.5rem', border: '2px solid #3b82f6', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.75rem', resize: 'vertical', boxSizing: 'border-box' }} value={cruceSqlQuery} onChange={e => setCruceSqlQuery(e.target.value)} placeholder="SELECT RUT FROM tabla WHERE..." />
-                                        <button type="button" style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.75rem', background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', alignSelf: 'flex-start' }} onClick={async () => {
+                                        <SqlButton onClick={async () => {
                                             if (!cruceSqlQuery.trim()) return;
                                             const r = await window.nexusAPI.executeSQL(cruceSqlQuery);
                                             if (!r.success) { setPanelMessage({ type: 'error', text: 'Error SQL: ' + r.error }); return; }
                                             setCruceSqlData(r.data);
                                             setPanelMessage({ type: 'success', text: `${r.data.length} registros cargados desde SQL.` });
-                                        }}>⚡ Ejecutar</button>
+                                        }} />
                                         {cruceSqlData && <p className="text-xs text-emerald-600 font-bold">✓ {cruceSqlData.length} registros cargados</p>}
                                     </div>
                                 )}
@@ -6054,13 +6085,13 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                             ) : (
                                 <div className="flex flex-col gap-1">
                                     <textarea style={{ width: '100%', minHeight: '70px', padding: '0.5rem', border: '2px solid #3b82f6', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.75rem', resize: 'vertical', boxSizing: 'border-box' }} value={cruceSqlQuery} onChange={e => setCruceSqlQuery(e.target.value)} placeholder="SELECT ROW_ID FROM tabla WHERE..." />
-                                    <button type="button" style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.75rem', background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', alignSelf: 'flex-start' }} onClick={async () => {
+                                    <SqlButton onClick={async () => {
                                         if (!cruceSqlQuery.trim()) return;
                                         const r = await window.nexusAPI.executeSQL(cruceSqlQuery);
                                         if (!r.success) { setPanelMessage({ type: 'error', text: 'Error SQL: ' + r.error }); return; }
                                         setCruceSqlData(r.data);
                                         setPanelMessage({ type: 'success', text: `${r.data.length} registros cargados desde SQL.` });
-                                    }}>⚡ Ejecutar</button>
+                                    }} />
                                     {cruceSqlData && <p className="text-xs text-emerald-600 font-bold">✓ {cruceSqlData.length} registros cargados</p>}
                                 </div>
                             )}
@@ -6361,30 +6392,35 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                     setPanelMessage({ type: 'success', text: `¡Exportado! ${flatData.length} registros únicos con desdoblamiento horizontal.` });
 
                 } else {
-                    // --- VÍA 1: Dos archivos (OPERACIONES + UNICOS) ---
-                    // Archivo 1: OPERACIONES (todos)
-                    const { ws: wsOps, cleanData: cdOps } = crearSheetLimpio(processedData);
-                    const wbOps = window.XLSX.utils.book_new();
-                    window.XLSX.utils.book_append_sheet(wbOps, wsOps, alias);
-                    window.XLSX.writeFile(wbOps, `${alias}_${dateSuffix}_OPERACIONES.${exportFormat}`);
-
-                    // Archivo 2: UNICOS (primera aparición = mayor monto por el sort previo)
+                    // --- VÍA 1: Dos archivos (OPERACIONES + UNICOS) con descarga secuencial ---
+                    // Preparar UNICOS (primera aparición = mayor monto por sort previo)
                     const uniqueMap = new Map();
                     processedData.forEach(row => {
                         const id = String(row.ROW_ID || row.row_id || '').trim();
                         if (id && !uniqueMap.has(id)) uniqueMap.set(id, row);
                     });
                     const uniqueData = Array.from(uniqueMap.values());
-
                     const { ws: wsUni, cleanData: cdUni } = crearSheetLimpio(uniqueData);
                     const wbUni = window.XLSX.utils.book_new();
                     window.XLSX.utils.book_append_sheet(wbUni, wsUni, alias);
-                    window.XLSX.writeFile(wbUni, `${alias}_${dateSuffix}_UNICOS.${exportFormat}`);
+
+                    // Preparar OPERACIONES (todos)
+                    const { ws: wsOps, cleanData: cdOps } = crearSheetLimpio(processedData);
+                    const wbOps = window.XLSX.utils.book_new();
+                    window.XLSX.utils.book_append_sheet(wbOps, wsOps, alias);
 
                     stats.valid = cdUni.length;
                     stats.duplicates = processedData.length - uniqueData.length;
                     setProcessReport(stats);
-                    setPanelMessage({ type: 'success', text: `¡2 archivos generados! ${cdOps.length} operaciones, ${cdUni.length} únicos.` });
+
+                    // Descarga 1: UNICOS
+                    window.XLSX.writeFile(wbUni, `${alias}_${dateSuffix}_UNICOS.${exportFormat}`);
+                    setPanelMessage({ type: 'info', text: `Archivo UNICOS (${cdUni.length} registros) listo. En un momento se abrirá el segundo diálogo para OPERACIONES (${cdOps.length} registros)...` });
+
+                    // Descarga 2: OPERACIONES con delay para que el SO procese el primer diálogo
+                    await new Promise(resolve => setTimeout(resolve, 1200));
+                    window.XLSX.writeFile(wbOps, `${alias}_${dateSuffix}_OPERACIONES.${exportFormat}`);
+                    setPanelMessage({ type: 'success', text: `2 archivos generados: UNICOS (${cdUni.length}) y OPERACIONES (${cdOps.length} registros).` });
                 }
 
             } catch (error) {
@@ -6454,13 +6490,13 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                             ) : (
                                 <div className="flex flex-col gap-1">
                                     <textarea style={{ width: '100%', minHeight: '70px', padding: '0.5rem', border: '2px solid #3b82f6', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.75rem', resize: 'vertical', boxSizing: 'border-box' }} value={cruceSqlQuery} onChange={e => setCruceSqlQuery(e.target.value)} placeholder="SELECT ROW_ID FROM tabla WHERE..." />
-                                    <button type="button" style={{ padding: '4px 12px', borderRadius: '6px', fontWeight: 'bold', fontSize: '0.75rem', background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', alignSelf: 'flex-start' }} onClick={async () => {
+                                    <SqlButton onClick={async () => {
                                         if (!cruceSqlQuery.trim()) return;
                                         const r = await window.nexusAPI.executeSQL(cruceSqlQuery);
                                         if (!r.success) { setPanelMessage({ type: 'error', text: 'Error SQL: ' + r.error }); return; }
                                         setCruceSqlData(r.data);
                                         setPanelMessage({ type: 'success', text: `${r.data.length} registros cargados desde SQL.` });
-                                    }}>⚡ Ejecutar</button>
+                                    }} />
                                     {cruceSqlData && <p className="text-xs text-emerald-600 font-bold">✓ {cruceSqlData.length} registros cargados</p>}
                                 </div>
                             )}
@@ -6549,12 +6585,11 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
     // --- WRAPPER TASK ---
     const TaskCargaBancoChile = ({ Icon }) => {
         const [selectedCampaign, setSelectedCampaign] = useState('');
-        const [openPanels, setOpenPanels] = useState({ consumo: false, derivacion: false, repro1: false, reprotototal: false });
+        const [openPanels, setOpenPanels] = useState({ consumo: false, repro1: false, reprotototal: false });
         const [globalTrigger, setGlobalTrigger] = useState(0);
 
         const campaigns = [
             { id: 'consumo', code: 'BCH_CONSUMO', name: 'Banco de Chile Consumo', status: 'active' },
-            { id: 'derivacion', code: 'BCH_DERIVACION', name: 'Banco de Chile Derivación', status: 'construction' },
             { id: 'repro1', code: 'REPRO_1', name: 'Recaptación Monto', alias: 'REPRO_1', status: 'active' },
             { id: 'reprotototal', code: 'REPRO_TOTAL', name: 'Reprogramación Total Monto TC', alias: 'REPRO_TOTAL', status: 'active' }
         ];
@@ -6607,13 +6642,6 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
                     </div>
                 )}
 
-                {selectedCampaign === 'derivacion' && (
-                    <div className="bg-orange-50 border border-orange-200 rounded-lg p-8 text-center">
-                        <Icon name="settings" size={40} className="mx-auto text-orange-400 mb-3" />
-                        <h3 className="text-lg font-bold text-orange-800 mb-2">En Construcción</h3>
-                        <p className="text-sm text-orange-700 max-w-md mx-auto">Esta campaña requiere conectividad T-SQL que está en evaluación. Se habilitará en una versión futura.</p>
-                    </div>
-                )}
 
                 {selectedCampaign === 'todas' && (
                     <div className="bg-slate-800 p-4 rounded-lg flex flex-col md:flex-row justify-between items-center shadow-md mb-2">
@@ -6822,7 +6850,7 @@ window.NexusActiveModule = ({ React, useState, useEffect, ui, utils, db, goHome 
             if (!ws) { addToast('No hay datos para exportar.', 'warning'); return; }
             const wb = window.XLSX.utils.book_new();
             window.XLSX.utils.book_append_sheet(wb, ws, 'Simuladores');
-            window.XLSX.writeFile(wb, `Simuladores_BCH_${getFechaFormato()}.xlsx`);
+            window.XLSX.writeFile(wb, `Simuladores_BCH_${getFechaFormato()}_Cruzados.xlsx`);
             addToast(`Exportados ${cleanData.length} registros.`, 'success');
         };
 
@@ -7680,7 +7708,8 @@ AND (b.STATUS IN (8,89,90,91,92,93,94,95,96,97,98,99,100,101,200) OR b.STATUS IS
         const fixBuildUpdate = (row, agenteIdent, agenteTv) => {
             const rappel = getRappel();
             const fecha = getDate();
-            return `UPDATE ${fixCampana.Result} SET PRIORITE=0, VERSOP=${agenteIdent}, ID_TV=${agenteIdent}, TV='${agenteTv}', RAPPEL='${rappel}', STATUS=94, LIB_STATUS='VOLVER A LLAMAR', DETAIL=1, mixup=1, tzbegin=0900, tzend=2000, DATE='${fecha}' WHERE INDICE=${row.indice};`;
+            const nivabsCol = limpiarIntentos ? `, NIVABS=${nivabsValue}` : '';
+            return `UPDATE ${fixCampana.Result} SET PRIORITE=0, VERSOP=${agenteIdent}, ID_TV=${agenteIdent}, TV='${agenteTv}', RAPPEL='${rappel}', STATUS=94, LIB_STATUS='VOLVER A LLAMAR', DETAIL=1, mixup=1, tzbegin=0900, tzend=2000, DATE='${fecha}'${nivabsCol} WHERE INDICE=${row.indice};`;
         };
 
         // Resolver agente (desde catálogo o desde el registro mismo)
@@ -7853,7 +7882,8 @@ AND (b.STATUS IN (8,89,90,91,92,93,94,95,96,97,98,99,100,101,200) OR b.STATUS IS
             const tv = agenteObj ? agenteObj.TV : (csResultado.TV || csAgenteSeleccionado);
             const rappel = getRappel();
             const fecha = getDate();
-            const sqlAgendar = `UPDATE ${csCampana.Result} SET PRIORITE=0, VERSOP=${ident}, ID_TV=${ident}, TV='${tv}', RAPPEL='${rappel}', STATUS=94, LIB_STATUS='VOLVER A LLAMAR', DETAIL=1, mixup=1, tzbegin=0900, tzend=2000, DATE='${fecha}' WHERE INDICE=${csResultado.INDICE};`;
+            const nivabsCol = limpiarIntentos ? `, NIVABS=${nivabsValue}` : '';
+            const sqlAgendar = `UPDATE ${csCampana.Result} SET PRIORITE=0, VERSOP=${ident}, ID_TV=${ident}, TV='${tv}', RAPPEL='${rappel}', STATUS=94, LIB_STATUS='VOLVER A LLAMAR', DETAIL=1, mixup=1, tzbegin=0900, tzend=2000, DATE='${fecha}'${nivabsCol} WHERE INDICE=${csResultado.INDICE};`;
             const sqlHabilitar = csExcluido ? `UPDATE ${csCampana.TablaCliente} SET ${campoMes}='${csMesCarga}' WHERE INDICE=${csResultado.INDICE};\n` : '';
             const sqlFinal = sqlHabilitar + sqlAgendar;
 
@@ -8774,6 +8804,7 @@ AND (b.STATUS IN (8,89,90,91,92,93,94,95,96,97,98,99,100,101,200) OR b.STATUS IS
         // --- COLUMNAS DETECTADAS ---
         const [detectedColumns, setDetectedColumns] = useState([]);
         const [campoMesCarga, setCampoMesCarga] = useState(''); // 'MESCARGA' | 'MES_CARGA' | ''
+        const [campoIdentificador, setCampoIdentificador] = useState(''); // 'ROW_ID' | 'RUT' | 'RUT_CLIENTE' | ''
 
         // --- WHERE BUILDER ---
         // Fijos: MESCARGA/MES_CARGA = mesCurso, STATUS = 2
@@ -8845,6 +8876,7 @@ AND (b.STATUS IN (8,89,90,91,92,93,94,95,96,97,98,99,100,101,200) OR b.STATUS IS
             setCampanaSeleccionada(camp);
             setDetectedColumns([]);
             setCampoMesCarga('');
+            setCampoIdentificador('');
             setWhereExtras([]);
             setActiveExtraCols(new Set());
             setGrupos([]);
@@ -8865,6 +8897,11 @@ AND (b.STATUS IN (8,89,90,91,92,93,94,95,96,97,98,99,100,101,200) OR b.STATUS IS
                     const mc = cols.find(c => c.toUpperCase() === 'MESCARGA') ? 'MESCARGA'
                         : cols.find(c => c.toUpperCase() === 'MES_CARGA') ? 'MES_CARGA' : '';
                     setCampoMesCarga(mc);
+                    // Detectar campo identificador: prioridad ROW_ID > RUT > RUT_CLIENTE
+                    const ci = cols.find(c => c.toUpperCase() === 'ROW_ID') ? 'ROW_ID'
+                        : cols.find(c => c.toUpperCase() === 'RUT') ? 'RUT'
+                            : cols.find(c => c.toUpperCase() === 'RUT_CLIENTE') ? 'RUT_CLIENTE' : '';
+                    setCampoIdentificador(ci);
                 }
             } catch (e) { /* no bloquear */ }
         };
@@ -8955,7 +8992,7 @@ AND (b.STATUS IN (8,89,90,91,92,93,94,95,96,97,98,99,100,101,200) OR b.STATUS IS
                 // Columnas extra select sin prefijo de alias
                 const colExtra = activeExtraCols.size > 0 ? ', ' + [...activeExtraCols].join(', ') : '';
 
-                const q = `SELECT INDICE, STATUS, LIB_STATUS, DETAIL, LIB_DETAIL, BASE, ${campoMesCarga}, DATE AS REC_DATE, ID_TV AS REC_ID_TV, TV AS REC_TV, '${campanaSeleccionada.NombreCampana}' AS NOMBRE_CAMPANA${colExtra} FROM ${campanaSeleccionada.TablaCliente} a JOIN ${campanaSeleccionada.Result} b ON a.INDICE = b.INDICE WHERE ${campoMesCarga} = '${mesCurso}' AND ${whereStatus}${whereOpcional}`;
+                const q = `SELECT a.INDICE, STATUS, LIB_STATUS, DETAIL, LIB_DETAIL, BASE, ${campoMesCarga}, DATE AS REC_DATE, ID_TV AS REC_ID_TV, TV AS REC_TV, '${campanaSeleccionada.NombreCampana}' AS NOMBRE_CAMPANA${colExtra} FROM ${campanaSeleccionada.TablaCliente} a JOIN ${campanaSeleccionada.Result} b ON a.INDICE = b.INDICE WHERE ${campoMesCarga} = '${mesCurso}' AND ${whereStatus}${whereOpcional}`;
 
                 const r = await window.nexusAPI.executeSQL(q);
                 if (!r.success) throw new Error(r.error);
@@ -9137,6 +9174,10 @@ AND (b.STATUS IN (8,89,90,91,92,93,94,95,96,97,98,99,100,101,200) OR b.STATUS IS
                                 {campoMesCarga
                                     ? <span className="bg-purple-50 border border-purple-200 text-purple-800 px-2 py-1 rounded font-bold">✓ Campo mes: {campoMesCarga}</span>
                                     : <span className="bg-amber-50 border border-amber-200 text-amber-800 px-2 py-1 rounded font-bold">⚠ Campo mes no detectado aún</span>
+                                }
+                                {campoIdentificador
+                                    ? <span className="bg-teal-50 border border-teal-200 text-teal-800 px-2 py-1 rounded font-bold">✓ Identificador: {campoIdentificador}</span>
+                                    : <span className="bg-amber-50 border border-amber-200 text-amber-800 px-2 py-1 rounded font-bold">⚠ Sin ROW_ID / RUT / RUT_CLIENTE detectado</span>
                                 }
                             </div>
                         )}

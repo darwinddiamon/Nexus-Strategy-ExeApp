@@ -137,8 +137,8 @@ ipcMain.handle('save-connection', async (event, profile) => {
 
 // Manejador para conectar desde un perfil guardado
 ipcMain.handle('connect-from-profile', async (event, id) => {
-    if (activePools.size >= 2 && !activePools.has(id)) {
-        return { success: false, error: 'Límite de 2 conexiones simultáneas alcanzado.' };
+    if (activePools.size >= 3 && !activePools.has(id)) {
+        return { success: false, error: 'Límite de 3 conexiones simultáneas alcanzado.' };
     }
     const conns = getConnections();
     const profile = conns.find(c => c.id === id);
@@ -158,7 +158,7 @@ ipcMain.handle('connect-from-profile', async (event, id) => {
         } else {
             const dbConfig = { server: profile.server, user: profile.user, password: profile.password, options: { encrypt: false, trustServerCertificate: true } };
             if (profile.database && profile.database.trim() !== '') dbConfig.database = profile.database.trim();
-            pool = await sql.connect(dbConfig);
+            pool = await new sql.ConnectionPool(dbConfig).connect();
         }
 
         if (activePools.has(id)) {
@@ -191,8 +191,8 @@ ipcMain.handle('delete-connection', async (event, id) => {
 
 // Manejador para conectar a SQL (Solo en RAM, no guarda nada)
 ipcMain.handle('connect-sql', async (event, config) => {
-    if (activePools.size >= 2) {
-        return { success: false, error: 'Límite de 2 conexiones simultáneas alcanzado.' };
+    if (activePools.size >= 3) {
+        return { success: false, error: 'Límite de 3 conexiones simultáneas alcanzado.' };
     }
     const tempId = 'manual_' + Date.now();
     const name = config.name || config.server;
@@ -211,7 +211,7 @@ ipcMain.handle('connect-sql', async (event, config) => {
         } else {
             const dbConfig = { server: config.server, user: config.user, password: config.password, options: { encrypt: false, trustServerCertificate: true } };
             if (config.database && config.database.trim() !== '') dbConfig.database = config.database.trim();
-            pool = await sql.connect(dbConfig);
+            pool = await new sql.ConnectionPool(dbConfig).connect();
         }
 
         activePools.set(tempId, { id: tempId, engine: config.engine, pool, name });

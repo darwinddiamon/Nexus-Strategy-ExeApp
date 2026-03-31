@@ -1059,11 +1059,11 @@
                                     {/* SELECTOR DE PERFILES KEEPASS */}
                                     <div className="flex items-center justify-center gap-2 mb-4 p-3 bg-gray-50 rounded-lg border border-gray-200 max-w-md mx-auto transition-all">
                                         <Icon name="user" size={18} className="text-gray-400" />
-                                        <select disabled={activePools.length >= 2} value={selectedProfileId} onChange={(e) => handleSelectProfile(e.target.value)} className="flex-1 border-none bg-transparent font-bold text-gray-700 focus:ring-0 cursor-pointer outline-none disabled:opacity-50">
+                                        <select disabled={activePools.length >= 3} value={selectedProfileId} onChange={(e) => handleSelectProfile(e.target.value)} className="flex-1 border-none bg-transparent font-bold text-gray-700 focus:ring-0 cursor-pointer outline-none disabled:opacity-50">
                                             <option value="">-- Conexión Nueva / Manual --</option>
                                             {savedConnections.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                                         </select>
-                                        {selectedProfileId && activePools.length < 2 && (
+                                        {selectedProfileId && activePools.length < 3 && (
                                             <div className="flex gap-1 border-l border-gray-300 pl-2">
                                                 <button onClick={handleDeleteProfile} className="p-1.5 text-red-600 hover:bg-red-100 rounded" title="Eliminar este perfil sin dejar rastro"><Icon name="trash" size={16} /></button>
                                             </div>
@@ -1071,8 +1071,8 @@
                                     </div>
 
                                     <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', margin: '0.75rem 0' }}>
-                                        <button disabled={activePools.length >= 2 || selectedProfileId !== ''} type="button" onClick={() => setSqlEngine('sqlserver')} style={{ padding: '6px 18px', borderRadius: '8px', fontWeight: 'bold', fontSize: '0.85rem', border: '2px solid #3b82f6', background: sqlEngine === 'sqlserver' ? '#3b82f6' : 'white', color: sqlEngine === 'sqlserver' ? 'white' : '#3b82f6', cursor: (activePools.length >= 2 || selectedProfileId !== '') ? 'not-allowed' : 'pointer', opacity: (activePools.length >= 2 || selectedProfileId !== '') ? 0.5 : 1 }}>SQL Server</button>
-                                        <button disabled={activePools.length >= 2 || selectedProfileId !== ''} type="button" onClick={() => setSqlEngine('mysql')} style={{ padding: '6px 18px', borderRadius: '8px', fontWeight: 'bold', fontSize: '0.85rem', border: '2px solid #f97316', background: sqlEngine === 'mysql' ? '#f97316' : 'white', color: sqlEngine === 'mysql' ? 'white' : '#f97316', cursor: (activePools.length >= 2 || selectedProfileId !== '') ? 'not-allowed' : 'pointer', opacity: (activePools.length >= 2 || selectedProfileId !== '') ? 0.5 : 1 }}>MySQL</button>
+                                        <button disabled={activePools.length >= 3 || selectedProfileId !== ''} type="button" onClick={() => setSqlEngine('sqlserver')} style={{ padding: '6px 18px', borderRadius: '8px', fontWeight: 'bold', fontSize: '0.85rem', border: '2px solid #3b82f6', background: sqlEngine === 'sqlserver' ? '#3b82f6' : 'white', color: sqlEngine === 'sqlserver' ? 'white' : '#3b82f6', cursor: (activePools.length >= 3 || selectedProfileId !== '') ? 'not-allowed' : 'pointer', opacity: (activePools.length >= 3 || selectedProfileId !== '') ? 0.5 : 1 }}>SQL Server</button>
+                                        <button disabled={activePools.length >= 3 || selectedProfileId !== ''} type="button" onClick={() => setSqlEngine('mysql')} style={{ padding: '6px 18px', borderRadius: '8px', fontWeight: 'bold', fontSize: '0.85rem', border: '2px solid #f97316', background: sqlEngine === 'mysql' ? '#f97316' : 'white', color: sqlEngine === 'mysql' ? 'white' : '#f97316', cursor: (activePools.length >= 3 || selectedProfileId !== '') ? 'not-allowed' : 'pointer', opacity: (activePools.length >= 3 || selectedProfileId !== '') ? 0.5 : 1 }}>MySQL</button>
                                     </div>
                                 </div>
 
@@ -1098,7 +1098,7 @@
                                             <div key={pool.id} className="bg-green-50 border border-green-200 rounded-lg p-4 text-center shadow-sm relative overflow-hidden">
                                                 <div className="absolute top-0 left-0 w-full h-1 bg-green-500"></div>
                                                 <h4 className="text-green-800 font-bold text-md mb-1 flex items-center justify-center gap-1">
-                                                    <Icon name="check" size={18} /> Slot {idx === 0 ? 'A' : 'B'}
+                                                    <Icon name="check" size={18} /> Slot {idx === 0 ? 'A' : idx === 1 ? 'B' : 'C'}
                                                 </h4>
                                                 <p className="text-green-700 text-sm font-bold mb-1 truncate" title={pool.name}>{pool.name}</p>
                                                 <p className="text-green-600 text-xs mb-3 font-mono">{pool.engine.toUpperCase()}</p>
@@ -1111,9 +1111,9 @@
                                 )}
 
                                 {/* FORMULARIO DE CONEXIÓN */}
-                                {activePools.length < 2 && (
+                                {activePools.length < 3 && (
                                     <div className={`slide-up ${activePools.length > 0 ? 'border-t border-gray-200 pt-6 mt-4' : ''}`}>
-                                        {activePools.length > 0 && <h4 className="text-gray-500 font-bold mb-4 text-center text-sm uppercase tracking-wider">Conectar Motor a Slot {activePools.length === 0 ? 'A' : 'B'}</h4>}
+                                        {activePools.length > 0 && <h4 className="text-gray-500 font-bold mb-4 text-center text-sm uppercase tracking-wider">Conectar Motor a Slot {activePools.length === 0 ? 'A' : activePools.length === 1 ? 'B' : 'C'}</h4>}
                                         {selectedProfileId && !isEditingProfile ? (
                                             <div className="bg-blue-50 border border-blue-200 rounded-lg p-6 text-center mb-4 shadow-sm">
                                                 <Icon name="shield" size={36} className="text-blue-500 mx-auto mb-3" />

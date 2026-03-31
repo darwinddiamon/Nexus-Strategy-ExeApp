@@ -410,6 +410,169 @@ window.NexusActiveModule = ({
       wheres: []
     });
 
+    // ====================================================================
+    // SQL PRO — ESTADOS PARA MAPEO DE CAMPAÑAS Y COLUMNAS
+    // ====================================================================
+    const [sqlMapEnabled, setSqlMapEnabled] = useState(false); // Switch principal
+    const [sqlMapEngine, setSqlMapEngine] = useState('vocalcom'); // 'vocalcom' | 'vicidial'
+    const [sqlMapCampaigns, setSqlMapCampaigns] = useState([]); // Lista campañas cargadas
+    const [sqlMapLoading, setSqlMapLoading] = useState(false); // Spinner carga campañas
+    const [sqlMapCampaign, setSqlMapCampaign] = useState(null); // Campaña seleccionada
+    const [sqlMapTables, setSqlMapTables] = useState([]); // Tablas asociadas a campaña
+    const [sqlMapCols, setSqlMapCols] = useState([]); // Columnas de la tabla activa
+    const [sqlMapColsLoading, setSqlMapColsLoading] = useState(false);
+    const [sqlCopied, setSqlCopied] = useState(false); // Estado botón Copiar
+    const [sqlExecuting, setSqlExecuting] = useState(false); // Estado botón Ejecutar
+
+    // Genera el query COMPLETO (sin slice) para el preview y la ejecución
+    const generateFullSQLQuery = () => {
+      if (!queryConfig.sets.length || !queryConfig.wheres.length) return '-- Configura SET y WHERE para generar el query.';
+      const validRows = finalResult.filter(r => queryConfig.wheres.every(w => String(r[w.value] || '').trim() !== ''));
+      if (!validRows.length) return '-- Sin filas válidas (verifica que los campos WHERE no estén vacíos).';
+      if (queryConfig.grouped && queryConfig.wheres.length > 0) {
+        const groups = new Map();
+        const keyWhere = queryConfig.wheres[0];
+        validRows.forEach(row => {
+          const table = queryConfig.tableCol ? `${queryConfig.table}${row[queryConfig.tableCol] || ''}` : queryConfig.table;
+          const sets = queryConfig.sets.map(s => {
+            const val = s.type === 'manual' || s.mode === 'fixed' ? s.value : row[s.value] || '';
+            return `${s.target}='${String(val).replace(/'/g, "''")}'`;
+          }).join(', ');
+          const others = queryConfig.wheres.slice(1).map(w => `${w.logic} ${w.target} = '${String(row[w.value] || '').replace(/'/g, "''")}'`).join(' ');
+          const sig = `${table}|${sets}|${others}`;
+          if (!groups.has(sig)) groups.set(sig, {
+            table,
+            sets,
+            others,
+            ids: []
+          });
+          groups.get(sig).ids.push(String(row[keyWhere.value] || '').replace(/'/g, "''"));
+        });
+        return Array.from(groups.values()).map(g => `-- Grupo ${g.table} (${g.ids.length} registros)\n${queryConfig.type} ${g.table} SET ${g.sets} WHERE ${keyWhere.target} IN ('${g.ids.join("','")}') ${g.others};`).join('\n\n');
+      } else {
+        return validRows.map(row => {
+          const dTable = queryConfig.tableCol ? `${queryConfig.table}${row[queryConfig.tableCol] || ''}` : queryConfig.table;
+          const sets = queryConfig.sets.map(s => {
+            const val = s.type === 'manual' || s.mode === 'fixed' ? s.value : row[s.value] || '';
+            return `${s.target} = '${String(val).replace(/'/g, "''")}'`;
+          }).join(', ');
+          const wheres = queryConfig.wheres.map((w, i) => `${i > 0 ? ` ${w.logic} ` : ''}${w.target} = '${String(row[w.value] || '').replace(/'/g, "''")}'`).join('');
+          return `${queryConfig.type} ${dTable} SET ${sets} WHERE ${wheres};`;
+        }).join('\n');
+      }
+    };
+
+    // Carga campañas según motor seleccionado
+    const loadSqlMapCampaigns = async engine => {
+      if (!window.nexusAPI) {
+        addToast('Sin conexión SQL activa.', 'error');
+        return;
+      }
+      setSqlMapLoading(true);
+      setSqlMapCampaigns([]);
+      setSqlMapCampaign(null);
+      setSqlMapTables([]);
+      setSqlMapCols([]);
+      try {
+        let query = '';
+        if (engine === 'vocalcom') {
+          query = `SELECT CampaignId AS ID_CAMPAIGN, customerId AS CustomerID, Base AS CustomerDB, Name AS CallFileName FROM HN_Admin..ListCallFiles WHERE CampaignId IS NOT NULL AND CampaignId <> '' ORDER BY CampaignId ASC`;
+        } else {
+          query = `SELECT c.campaign_id AS ID_CAMPAIGN, c.campaign_name AS NAME_CAMPAIGN, IFNULL(GROUP_CONCAT(l.list_id SEPARATOR ', '), '') AS ACTIVE_LIST FROM vicidial_campaigns c LEFT JOIN vicidial_lists l ON c.campaign_id = l.campaign_id AND l.active = 'Y' WHERE c.active = 'Y' GROUP BY c.campaign_id, c.campaign_name`;
+        }
+        const r = await window.nexusAPI.executeSQL(query);
+        if (!r.success) throw new Error(r.error);
+        setSqlMapCampaigns(r.data || []);
+        if ((r.data || []).length === 0) addToast('Sin campañas activas en la conexión.', 'warning');
+      } catch (e) {
+        addToast('Error cargando campañas: ' + e.message, 'error');
+      } finally {
+        setSqlMapLoading(false);
+      }
+    };
+
+    // Selección de campaña → construir lista de tablas
+    const handleSqlMapCampaignSelect = async camp => {
+      setSqlMapCampaign(camp);
+      setSqlMapCols([]);
+      let tables = [];
+      if (sqlMapEngine === 'vocalcom') {
+        const dbPfx = camp.CustomerDB ? `[${camp.CustomerDB}]..` : '';
+        tables = [{
+          label: `CLIENTE_${camp.ID_CAMPAIGN}`,
+          value: `${dbPfx}[CLIENTE_${camp.ID_CAMPAIGN}]`
+        }, {
+          label: `C${camp.CustomerID}_${camp.CallFileName}`,
+          value: `${dbPfx}[C${camp.CustomerID}_${camp.CallFileName}]`
+        }];
+      } else {
+        // Vicidial: tablas estándar + custom_[list_id] por cada lista activa
+        tables = [{
+          label: `vicidial_list (${camp.ID_CAMPAIGN})`,
+          value: 'vicidial_list'
+        }];
+        if (camp.ACTIVE_LIST) {
+          camp.ACTIVE_LIST.split(',').map(l => l.trim()).filter(Boolean).forEach(lid => {
+            tables.push({
+              label: `custom_${lid}`,
+              value: `custom_${lid}`
+            });
+          });
+        }
+      }
+      setSqlMapTables(tables);
+    };
+
+    // Al seleccionar tabla → cargar columnas via SELECT TOP 1 / LIMIT 1
+    const handleSqlMapTableSelect = async tableValue => {
+      if (!tableValue || !window.nexusAPI) return;
+      setQueryConfig(prev => ({
+        ...prev,
+        table: tableValue
+      }));
+      setSqlMapColsLoading(true);
+      setSqlMapCols([]);
+      try {
+        const limitClause = sqlMapEngine === 'vicidial' ? `${tableValue} LIMIT 1` : `TOP 1 * FROM ${tableValue}`;
+        const q = sqlMapEngine === 'vicidial' ? `SELECT * FROM ${limitClause}` : `SELECT ${limitClause}`;
+        const r = await window.nexusAPI.executeSQL(q);
+        if (r.success && r.data && r.data.length > 0) {
+          setSqlMapCols(Object.keys(r.data[0]));
+        } else {
+          addToast('Tabla vacía o sin acceso para mapear columnas.', 'warning');
+        }
+      } catch (e) {
+        addToast('Error mapeando columnas: ' + e.message, 'error');
+      } finally {
+        setSqlMapColsLoading(false);
+      }
+    };
+
+    // Ejecutar el query completo contra nexusAPI
+    const executeSqlProQuery = async () => {
+      const fullQuery = generateFullSQLQuery();
+      // Bloquear solo si no hay ninguna sentencia real (UPDATE/INSERT) — los comentarios -- en modo agrupado son válidos
+      const hasRealStatement = /\b(UPDATE|INSERT)\b/i.test(fullQuery);
+      if (!hasRealStatement) {
+        addToast('El query no está listo para ejecutar.', 'warning');
+        return;
+      }
+      if (!window.nexusAPI) {
+        addToast('Sin conexión SQL activa.', 'error');
+        return;
+      }
+      setSqlExecuting(true);
+      try {
+        const r = await window.nexusAPI.executeSQL(fullQuery);
+        if (!r.success) throw new Error(r.error);
+        addToast(`✅ Ejecución completada correctamente.`, 'success');
+      } catch (e) {
+        addToast('Error SQL: ' + e.message, 'error');
+      } finally {
+        setSqlExecuting(false);
+      }
+    };
+
     // --- AUTO-CORRECCIÓN VISUAL (ICONO LINK) ---
     useEffect(() => {
       const fixIcon = async () => {
@@ -2500,6 +2663,251 @@ window.NexusActiveModule = ({
     }, "Enter"))), /*#__PURE__*/React.createElement("div", {
       className: "preview-box"
     }, generateListPreview())), outputTab === 'query' && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        background: sqlMapEnabled ? '#f0fdf4' : '#f8fafc',
+        border: `1px solid ${sqlMapEnabled ? '#86efac' : '#e2e8f0'}`,
+        borderRadius: '10px',
+        padding: '0.75rem 1rem',
+        marginBottom: '1rem',
+        transition: 'all 0.2s'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '10px'
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: '1rem'
+      }
+    }, "\uD83D\uDD17"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontWeight: 'bold',
+        fontSize: '0.82rem',
+        color: sqlMapEnabled ? '#166534' : '#475569'
+      }
+    }, "Mapear Campa\xF1as y Columnas"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: '0.72rem',
+        color: '#94a3b8'
+      }
+    }, "Carga tablas y columnas desde la BD activa para asistir la configuraci\xF3n"))), /*#__PURE__*/React.createElement("label", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '8px',
+        cursor: 'pointer',
+        userSelect: 'none'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: 'relative',
+        width: '42px',
+        height: '24px'
+      }
+    }, /*#__PURE__*/React.createElement("input", {
+      type: "checkbox",
+      checked: sqlMapEnabled,
+      onChange: e => {
+        setSqlMapEnabled(e.target.checked);
+        if (!e.target.checked) {
+          setSqlMapCampaigns([]);
+          setSqlMapCampaign(null);
+          setSqlMapTables([]);
+          setSqlMapCols([]);
+        }
+      },
+      style: {
+        opacity: 0,
+        width: 0,
+        height: 0,
+        position: 'absolute'
+      }
+    }), /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: 'absolute',
+        inset: 0,
+        borderRadius: '12px',
+        background: sqlMapEnabled ? '#22c55e' : '#cbd5e1',
+        transition: 'background 0.2s'
+      }
+    }), /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: 'absolute',
+        top: '3px',
+        left: sqlMapEnabled ? '21px' : '3px',
+        width: '18px',
+        height: '18px',
+        borderRadius: '50%',
+        background: 'white',
+        boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+        transition: 'left 0.2s'
+      }
+    })))), sqlMapEnabled && /*#__PURE__*/React.createElement("div", {
+      style: {
+        background: '#f0fdf4',
+        border: '1px solid #86efac',
+        borderRadius: '10px',
+        padding: '1rem',
+        marginBottom: '1.25rem',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '0.75rem',
+        animation: 'fadeIn 0.2s'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: '0.5rem',
+        alignItems: 'center'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "label-sm",
+      style: {
+        minWidth: '70px',
+        margin: 0
+      }
+    }, "Motor:"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: '0.5rem'
+      }
+    }, [{
+      id: 'vocalcom',
+      label: '🔵 Vocalcom',
+      sub: 'SQL Server'
+    }, {
+      id: 'vicidial',
+      label: '🟠 Vicidial',
+      sub: 'MySQL'
+    }].map(eng => /*#__PURE__*/React.createElement("button", {
+      key: eng.id,
+      onClick: () => {
+        setSqlMapEngine(eng.id);
+        setSqlMapCampaigns([]);
+        setSqlMapCampaign(null);
+        setSqlMapTables([]);
+        setSqlMapCols([]);
+      },
+      style: {
+        padding: '5px 14px',
+        borderRadius: '6px',
+        border: `2px solid ${sqlMapEngine === eng.id ? eng.id === 'vocalcom' ? '#3b82f6' : '#f97316' : '#d1fae5'}`,
+        background: sqlMapEngine === eng.id ? eng.id === 'vocalcom' ? '#eff6ff' : '#fff7ed' : 'white',
+        fontWeight: sqlMapEngine === eng.id ? 'bold' : 'normal',
+        fontSize: '0.78rem',
+        cursor: 'pointer',
+        color: sqlMapEngine === eng.id ? eng.id === 'vocalcom' ? '#1d4ed8' : '#c2410c' : '#475569'
+      }
+    }, eng.label, " ", /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontWeight: 'normal',
+        opacity: 0.7
+      }
+    }, "(", eng.sub, ")")))), /*#__PURE__*/React.createElement("button", {
+      className: "btn btn-sm",
+      style: {
+        background: '#166534',
+        color: 'white',
+        border: 'none',
+        padding: '5px 12px',
+        borderRadius: '6px',
+        fontSize: '0.75rem',
+        cursor: 'pointer',
+        opacity: sqlMapLoading ? 0.6 : 1
+      },
+      disabled: sqlMapLoading,
+      onClick: () => loadSqlMapCampaigns(sqlMapEngine)
+    }, sqlMapLoading ? '⏳ Cargando...' : '🔄 Cargar Campañas')), sqlMapCampaigns.length > 0 && /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: '0.75rem',
+        alignItems: 'flex-end',
+        flexWrap: 'wrap'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: '200px'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "label-sm"
+    }, "Campa\xF1a"), /*#__PURE__*/React.createElement("select", {
+      className: "key-selector",
+      style: {
+        borderColor: '#86efac'
+      },
+      value: sqlMapCampaign ? sqlMapCampaign.ID_CAMPAIGN : '',
+      onChange: e => {
+        const c = sqlMapCampaigns.find(x => x.ID_CAMPAIGN === e.target.value);
+        if (c) handleSqlMapCampaignSelect(c);
+      }
+    }, /*#__PURE__*/React.createElement("option", {
+      value: ""
+    }, "-- Seleccionar campa\xF1a --"), sqlMapCampaigns.map(c => /*#__PURE__*/React.createElement("option", {
+      key: c.ID_CAMPAIGN,
+      value: c.ID_CAMPAIGN
+    }, c.ID_CAMPAIGN, c.NAME_CAMPAIGN ? ` — ${c.NAME_CAMPAIGN}` : '', c.ACTIVE_LIST ? ` [listas: ${c.ACTIVE_LIST}]` : ''))))), sqlMapTables.length > 0 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      className: "label-sm"
+    }, "Tabla destino ", sqlMapColsLoading && /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: '#16a34a',
+        fontStyle: 'italic'
+      }
+    }, "\u2014 mapeando columnas...")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: '0.5rem',
+        flexWrap: 'wrap'
+      }
+    }, sqlMapTables.map(t => /*#__PURE__*/React.createElement("button", {
+      key: t.value,
+      onClick: () => handleSqlMapTableSelect(t.value),
+      style: {
+        padding: '5px 12px',
+        borderRadius: '6px',
+        border: `2px solid ${queryConfig.table === t.value ? '#16a34a' : '#bbf7d0'}`,
+        background: queryConfig.table === t.value ? '#dcfce7' : 'white',
+        fontWeight: queryConfig.table === t.value ? 'bold' : 'normal',
+        fontSize: '0.78rem',
+        cursor: 'pointer',
+        color: queryConfig.table === t.value ? '#166534' : '#374151',
+        fontFamily: 'monospace'
+      }
+    }, t.label)))), sqlMapCols.length > 0 && /*#__PURE__*/React.createElement("div", {
+      style: {
+        padding: '0.5rem 0.75rem',
+        background: '#dcfce7',
+        borderRadius: '6px',
+        fontSize: '0.75rem',
+        color: '#166534',
+        display: 'flex',
+        gap: '6px',
+        alignItems: 'center',
+        flexWrap: 'wrap'
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontWeight: 'bold'
+      }
+    }, "\u2705 ", sqlMapCols.length, " columnas mapeadas."), /*#__PURE__*/React.createElement("span", {
+      style: {
+        opacity: 0.8
+      }
+    }, "Los campos BD en SET y WHERE ahora muestran el listado de la tabla seleccionada.")), !window.nexusAPI && /*#__PURE__*/React.createElement("div", {
+      style: {
+        padding: '0.5rem 0.75rem',
+        background: '#fef2f2',
+        borderRadius: '6px',
+        fontSize: '0.75rem',
+        color: '#dc2626',
+        fontWeight: 'bold'
+      }
+    }, "\u26A0\uFE0F Sin conexi\xF3n SQL activa. Con\xE9ctate desde Nexus para usar el mapeo.")), /*#__PURE__*/React.createElement("div", {
       className: "config-row"
     }, /*#__PURE__*/React.createElement("div", {
       style: {
@@ -2515,7 +2923,13 @@ window.NexusActiveModule = ({
       onChange: e => setQueryConfig({
         ...queryConfig,
         table: e.target.value
-      })
+      }),
+      style: {
+        fontFamily: 'monospace',
+        fontSize: '0.82rem',
+        background: sqlMapCols.length > 0 ? '#f0fdf4' : undefined,
+        borderColor: sqlMapCols.length > 0 ? '#86efac' : undefined
+      }
     })), /*#__PURE__*/React.createElement("div", {
       style: {
         flex: 1
@@ -2591,7 +3005,29 @@ window.NexusActiveModule = ({
         gridTemplateColumns: '1fr 100px 1.2fr 40px',
         gap: '8px'
       }
-    }, /*#__PURE__*/React.createElement("input", {
+    }, sqlMapCols.length > 0 ? /*#__PURE__*/React.createElement("select", {
+      className: "key-selector",
+      style: {
+        fontFamily: 'monospace',
+        fontSize: '0.78rem',
+        borderColor: '#86efac',
+        background: '#f0fdf4'
+      },
+      value: s.target,
+      onChange: e => {
+        const n = [...queryConfig.sets];
+        n[i].target = e.target.value;
+        setQueryConfig({
+          ...queryConfig,
+          sets: n
+        });
+      }
+    }, /*#__PURE__*/React.createElement("option", {
+      value: ""
+    }, "-- Campo BD --"), sqlMapCols.map(c => /*#__PURE__*/React.createElement("option", {
+      key: c,
+      value: c
+    }, c))) : /*#__PURE__*/React.createElement("input", {
       type: "text",
       className: "key-selector",
       placeholder: "Campo BD",
@@ -2651,7 +3087,7 @@ window.NexusActiveModule = ({
       }
     }, /*#__PURE__*/React.createElement("option", {
       value: ""
-    }, "-- Columna --"), Object.keys(finalResult[0] || {}).map(c => /*#__PURE__*/React.createElement("option", {
+    }, "-- Columna Excel --"), Object.keys(finalResult[0] || {}).map(c => /*#__PURE__*/React.createElement("option", {
       key: c,
       value: c
     }, c))), /*#__PURE__*/React.createElement("button", {
@@ -2697,7 +3133,29 @@ window.NexusActiveModule = ({
       }
     }, i > 0 && /*#__PURE__*/React.createElement("span", {
       className: "sql-badge"
-    }, "AND"), /*#__PURE__*/React.createElement("input", {
+    }, "AND"), sqlMapCols.length > 0 ? /*#__PURE__*/React.createElement("select", {
+      className: "key-selector",
+      style: {
+        fontFamily: 'monospace',
+        fontSize: '0.78rem',
+        borderColor: '#86efac',
+        background: '#f0fdf4'
+      },
+      value: w.target,
+      onChange: e => {
+        const n = [...queryConfig.wheres];
+        n[i].target = e.target.value;
+        setQueryConfig({
+          ...queryConfig,
+          wheres: n
+        });
+      }
+    }, /*#__PURE__*/React.createElement("option", {
+      value: ""
+    }, "-- Campo BD --"), sqlMapCols.map(c => /*#__PURE__*/React.createElement("option", {
+      key: c,
+      value: c
+    }, c))) : /*#__PURE__*/React.createElement("input", {
       type: "text",
       className: "key-selector",
       placeholder: "Campo BD",
@@ -2749,13 +3207,110 @@ window.NexusActiveModule = ({
         }]
       })
     }, "+ Agregar Condici\xF3n")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginTop: '1.25rem'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: '0.4rem'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
       className: "label-sm",
       style: {
-        marginTop: '1rem'
+        margin: 0
       }
-    }, "Vista Previa Query:"), /*#__PURE__*/React.createElement("div", {
-      className: "preview-box"
-    }, generateSQLQuery())), /*#__PURE__*/React.createElement("div", {
+    }, "VISTA PREVIA QUERY:", /*#__PURE__*/React.createElement("span", {
+      style: {
+        marginLeft: '8px',
+        fontWeight: 'normal',
+        color: '#9ca3af',
+        fontSize: '0.7rem'
+      }
+    }, finalResult.filter(r => queryConfig.wheres.every(w => String(r[w.value] || '').trim() !== '')).length, " sentencias")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: '0.5rem'
+      }
+    }, /*#__PURE__*/React.createElement("button", {
+      onClick: () => {
+        const q = generateFullSQLQuery();
+        navigator.clipboard.writeText(q).then(() => {
+          setSqlCopied(true);
+          setTimeout(() => setSqlCopied(false), 2000);
+        });
+      },
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '5px',
+        padding: '5px 12px',
+        borderRadius: '6px',
+        border: `1px solid ${sqlCopied ? '#86efac' : '#d1d5db'}`,
+        background: sqlCopied ? '#dcfce7' : 'white',
+        color: sqlCopied ? '#166534' : '#374151',
+        fontWeight: 'bold',
+        fontSize: '0.75rem',
+        cursor: 'pointer',
+        transition: 'all 0.2s'
+      }
+    }, sqlCopied ? '✅ Copiado' : '📋 Copiar'), /*#__PURE__*/React.createElement("button", {
+      disabled: sqlExecuting,
+      onClick: () => {
+        const q = generateFullSQLQuery();
+        const hasReal = /\b(UPDATE|INSERT)\b/i.test(q);
+        if (!hasReal) {
+          addToast('El query no está listo para ejecutar.', 'warning');
+          return;
+        }
+        if (!window.nexusAPI) {
+          addToast('Sin conexión SQL activa.', 'error');
+          return;
+        }
+        utils.confirmAction({
+          title: '⚡ Ejecutar en SQL',
+          message: `Se van a ejecutar ${finalResult.filter(r => queryConfig.wheres.every(w => String(r[w.value] || '').trim() !== '')).length} sentencias ${queryConfig.type} directamente en la base de datos.\n\nVerifica que el query en la vista previa sea correcto antes de confirmar.\n\n¿Continuar?`,
+          type: 'danger',
+          confirmText: 'Ejecutar',
+          onConfirm: executeSqlProQuery
+        });
+      },
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '5px',
+        padding: '5px 14px',
+        borderRadius: '6px',
+        border: 'none',
+        background: sqlExecuting ? '#94a3b8' : window.nexusAPI ? '#7c3aed' : '#e2e8f0',
+        color: window.nexusAPI ? 'white' : '#9ca3af',
+        fontWeight: 'bold',
+        fontSize: '0.75rem',
+        cursor: sqlExecuting ? 'not-allowed' : window.nexusAPI ? 'pointer' : 'default',
+        transition: 'all 0.2s'
+      },
+      title: !window.nexusAPI ? 'Sin conexión SQL activa' : 'Ejecutar query en la BD'
+    }, sqlExecuting ? '⏳ Ejecutando...' : '▶ Ejecutar en SQL'))), /*#__PURE__*/React.createElement("div", {
+      style: {
+        maxHeight: '340px',
+        overflowY: 'auto',
+        overflowX: 'auto',
+        fontFamily: "'Consolas', 'Courier New', monospace",
+        fontSize: '0.78rem',
+        whiteSpace: 'pre',
+        lineHeight: '1.65',
+        background: '#1e1e2e',
+        color: '#cdd6f4',
+        borderRadius: '8px',
+        padding: '1rem 1.25rem',
+        border: '1px solid #313244',
+        minWidth: '0',
+        width: '100%',
+        boxSizing: 'border-box'
+      }
+    }, generateFullSQLQuery()))), /*#__PURE__*/React.createElement("div", {
       style: {
         display: 'flex',
         gap: '1rem',
